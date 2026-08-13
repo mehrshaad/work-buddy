@@ -75,9 +75,15 @@ if st is None:
 # ---------------------------------------------------------------- menu bar ----
 paused = st.get("paused")
 show_label = st.get("show_label", True)
-icon = "menubar-paused@2x.png" if paused else "menubar-tracking@2x.png"
+# A base64 template image is sized in POINTS, so a 22px glyph is upscaled on a Retina
+# display and can never look sharp at the right size. An SF Symbol is a vector and stays
+# crisp, so it is the default; `menubar.style = "buddy"` switches back to the drawn icon.
+if st.get("menubar_style", "symbol") == "buddy":
+    icon = img("menubar-paused@2x.png" if paused else "menubar-tracking@2x.png")
+else:
+    icon = " | sfimage=" + ("zzz" if paused else "eye.fill")
 if not show_label:
-    print(" " + img(icon))
+    print(" " + icon)
 elif paused:
     left = st.get("minutes_left")
     if st.get("indefinite") or left is None:
@@ -87,9 +93,9 @@ elif paused:
         label = f"{h}h" if m == 0 else f"{h}h {m}m"
     else:
         label = f"{int(left)}m"
-    print(f" {label}" + img(icon))
+    print(f" {label}" + icon)
 else:
-    print(f" {st.get('active_today', '')}".rstrip() + img(icon))
+    print(f" {st.get('active_today', '')}".rstrip() + icon)
 
 print("---")
 
@@ -152,6 +158,10 @@ print(f"--Pause reminder: every {(cfg.get('pause') or {}).get('reminder_minutes'
 for n in (15, 30, 60, 0):
     act(f"----{'Never' if n == 0 else f'Every {n}m'}", "config", "set",
         "pause.reminder_minutes", str(n))
+style = st.get("menubar_style", "symbol")
+print(f"--Icon: {'drawn buddy' if style == 'buddy' else 'crisp symbol'} | {FONT}")
+act("--↳ use the " + ("crisp symbol" if style == "buddy" else "drawn buddy"),
+    "config", "set", "menubar.style", "symbol" if style == "buddy" else "buddy")
 print(f"--{'☑' if show_label else '☐'}  Show the timer next to the icon | {FONT}")
 act("--↳ toggle", "config", "set", "menubar.show_label",
     "false" if show_label else "true")

@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parent
-SS = 8  # supersample factor, downsampled at the end for clean edges
+SS = 16  # supersample factor, downsampled at the end for clean edges
 
 INK = (24, 26, 43, 255)        # near-black indigo, the body
 FACE = (247, 244, 236, 255)    # warm cream, the eyes
@@ -70,9 +70,13 @@ def menubar(size, asleep=False):
     d = ImageDraw.Draw(img)
     # generous transparent margin: SwiftBar renders this at the bar's full height, so
     # a glyph drawn edge to edge looks enormous next to normal menu bar icons
-    pad = s * 0.28
-    d.rounded_rectangle([pad, pad, s - pad, s - pad], radius=s * 0.12, fill=black)
-    cy, dx, r = s * 0.50, s * 0.083, s * 0.045
+    # snap the box to whole output pixels so its edges land on pixel boundaries
+    # instead of straddling them, which is what reads as blur at this size
+    unit = SS
+    pad = round(s * 0.19 / unit) * unit
+    d.rounded_rectangle([pad, pad, s - pad - 1, s - pad - 1],
+                        radius=s * 0.11, fill=black)
+    cy, dx, r = s * 0.50, s * 0.105, s * 0.058
     for cx in (s / 2 - dx, s / 2 + dx):
         if asleep:
             h = r * 0.62

@@ -3336,6 +3336,7 @@ def cmd_status(cfg: dict, args) -> int:
         pass
     out = {
         "show_label": bool((cfg.get("menubar") or {}).get("show_label", True)),
+        "menubar_style": (cfg.get("menubar") or {}).get("style", "symbol"),
         "paused": bool(p),
         "indefinite": bool(p and (p.get("indefinite") or not p.get("until"))),
         "until": (p or {}).get("until"),
