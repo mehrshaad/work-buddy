@@ -74,12 +74,22 @@ if st is None:
 
 # ---------------------------------------------------------------- menu bar ----
 paused = st.get("paused")
-if paused:
+show_label = st.get("show_label", True)
+icon = "menubar-paused@2x.png" if paused else "menubar-tracking@2x.png"
+if not show_label:
+    print(" " + img(icon))
+elif paused:
     left = st.get("minutes_left")
-    label = "∞" if st.get("indefinite") or left is None else f"{left}m"
-    print(f" {label}" + img("menubar-paused@2x.png"))
+    if st.get("indefinite") or left is None:
+        label = "∞"
+    elif left >= 90:                       # "361m" is unreadable at a glance
+        h, m = divmod(int(left), 60)
+        label = f"{h}h" if m == 0 else f"{h}h {m}m"
+    else:
+        label = f"{int(left)}m"
+    print(f" {label}" + img(icon))
 else:
-    print(f" {st.get('active_today', '')}".rstrip() + img("menubar-tracking@2x.png"))
+    print(f" {st.get('active_today', '')}".rstrip() + img(icon))
 
 print("---")
 
@@ -99,11 +109,8 @@ if paused:
 else:
     for mins, text in ((15, "15 minutes"), (30, "30 minutes"), (60, "1 hour")):
         act(f"⏸  Pause {text}", "pause", "--minutes", str(mins))
-    if st.get("work_time"):
-        # labelled with the configured end so it never implies a hardcoded clock time
-        end = (jrun("config", "get", "work_hours") or {}).get("end", "")
-        act(f"⏸  Pause until end of day{f' ({end})' if end else ''}",
-            "pause", "--rest-of-day")
+    act("⏸  Pause until midnight", "pause", "--rest-of-day")
+    act("⏸  Pause until the next work period", "pause", "--next-period")
     act("⏸  Pause until I resume", "pause", "--indefinite")
 
 # -------------------------------------------------------------------- today ----
@@ -145,6 +152,9 @@ print(f"--Pause reminder: every {(cfg.get('pause') or {}).get('reminder_minutes'
 for n in (15, 30, 60, 0):
     act(f"----{'Never' if n == 0 else f'Every {n}m'}", "config", "set",
         "pause.reminder_minutes", str(n))
+print(f"--{'☑' if show_label else '☐'}  Show the timer next to the icon | {FONT}")
+act("--↳ toggle", "config", "set", "menubar.show_label",
+    "false" if show_label else "true")
 print(f"--Sources | {FONT}")
 for key, name in (("git", "Git commits"), ("shell", "Shell history"),
                   ("calendar", "Calendar feed"), ("cloud", "OneDrive files"),

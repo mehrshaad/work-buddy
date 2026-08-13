@@ -70,9 +70,9 @@ def menubar(size, asleep=False):
     d = ImageDraw.Draw(img)
     # generous transparent margin: SwiftBar renders this at the bar's full height, so
     # a glyph drawn edge to edge looks enormous next to normal menu bar icons
-    pad = s * 0.20
-    d.rounded_rectangle([pad, pad, s - pad, s - pad], radius=s * 0.17, fill=black)
-    cy, dx, r = s * 0.50, s * 0.115, s * 0.062
+    pad = s * 0.28
+    d.rounded_rectangle([pad, pad, s - pad, s - pad], radius=s * 0.12, fill=black)
+    cy, dx, r = s * 0.50, s * 0.083, s * 0.045
     for cx in (s / 2 - dx, s / 2 + dx):
         if asleep:
             h = r * 0.62
@@ -80,7 +80,13 @@ def menubar(size, asleep=False):
                                 radius=h / 2, fill=(0, 0, 0, 0))
         else:
             d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(0, 0, 0, 0))
-    return img.resize((size, size), Image.LANCZOS)
+    img = img.resize((size, size), Image.LANCZOS)
+    if asleep:
+        # a template image keeps its alpha, so a dimmed glyph reads as "asleep" in the
+        # bar itself — the closed eyes alone are easy to miss at this size
+        a = img.split()[3].point(lambda v: int(v * 0.55))
+        img.putalpha(a)
+    return img
 
 
 def main():

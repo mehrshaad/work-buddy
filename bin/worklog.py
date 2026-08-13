@@ -3270,13 +3270,14 @@ def cmd_pause(cfg: dict, args) -> int:
         return 0
     until = None
     if getattr(args, "rest_of_day", False):
-        _, day_end = window_bounds(cfg, now.date())
-        if now.isoweekday() not in cfg["work_days"] or day_end <= now:
-            # Nothing left to pause: the sampler is already idle outside the window,
-            # and rolling to tomorrow would silently pause for most of a day.
-            print("already outside work hours — nothing to pause")
+        # the calendar day, i.e. midnight tonight — always still ahead, so unlike a
+        # work-window bound this never has to refuse
+        until = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+    elif getattr(args, "next_period", False):
+        until = next_window_start(cfg, now)
+        if until is None:
+            print("no upcoming work window configured — nothing to pause until")
             return 0
-        until = day_end
     elif getattr(args, "until", None):
         h, m = parse_hhmm(args.until)
         until = now.replace(hour=h, minute=m, second=0, microsecond=0)
@@ -3334,6 +3335,7 @@ def cmd_status(cfg: dict, args) -> int:
     except Exception:
         pass
     out = {
+        "show_label": bool((cfg.get("menubar") or {}).get("show_label", True)),
         "paused": bool(p),
         "indefinite": bool(p and (p.get("indefinite") or not p.get("until"))),
         "until": (p or {}).get("until"),
@@ -3508,7 +3510,9 @@ def main() -> int:
     g.add_argument("--minutes", type=float, help="pause for this many minutes")
     g.add_argument("--until", help="pause until HH:MM")
     g.add_argument("--rest-of-day", action="store_true",
-                   help="pause until the end of today's work window")
+                   help="pause until midnight tonight")
+    g.add_argument("--next-period", action="store_true",
+                   help="pause until the next work window begins")
     g.add_argument("--indefinite", action="store_true",
                    help="pause until resumed (still ends at the workday's end)")
     q.add_argument("--reason", default="", help="note stored with the pause window")

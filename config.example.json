@@ -208,5 +208,8 @@
     "default_owner": "Your Name",
     "agent_hints": "Optional free text telling the summarizer how to choose between similar projects.",
     "section_title": "Status Tracker"
+  },
+  "menubar": {
+    "show_label": true
   }
 }

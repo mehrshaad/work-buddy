@@ -389,6 +389,34 @@ if _u3:
     check("an evening indefinite pause does not eat the next workday", _hrs <= 16, f"{_hrs:.1f}h")
 W.end_pause(_cfgp)
 
+# "end of day" is the calendar day, and a separate mode waits for the next window
+class _A:  # a stand-in for argparse's namespace
+    def __init__(self, **kw):
+        self.minutes = None; self.until = None; self.rest_of_day = False
+        self.next_period = False; self.reason = ""; self.quiet = True
+        self.__dict__.update(kw)
+
+
+(_ps / "pause.json").unlink(missing_ok=True)
+W.cmd_pause(_cfgp, _A(rest_of_day=True))
+_mid = W.active_pause(_cfgp)
+check("pause until end of day means midnight tonight",
+      _mid and datetime.fromisoformat(_mid["until"])
+      == datetime.combine(D.today() + timedelta(days=1), datetime.min.time()),
+      str((_mid or {}).get("until")))
+check("midnight is reachable at any hour, so it never has to refuse", _mid is not None)
+W.end_pause(_cfgp)
+
+W.cmd_pause(_cfgp, _A(next_period=True))
+_np = W.active_pause(_cfgp)
+check("pause until the next period ends when that window opens",
+      _np and datetime.fromisoformat(_np["until"])
+      == W.next_window_start(_cfgp, datetime.fromisoformat(_np["started"])),
+      str((_np or {}).get("until")))
+W.end_pause(_cfgp)
+check("the menu bar label can be switched off",
+      "show_label" in Path(W.__file__).read_text())
+
 # an expired pause retires itself on sight rather than lingering
 (_ps / "pause.json").write_text(json.dumps(
     {"started": "2026-08-12T09:00:00", "until": "2026-08-12T09:30:00",
