@@ -1,0 +1,212 @@
+{
+  "output_dir": "~/Documents/Work Log",
+  "state_dir": "~/.worklog",
+  "work_hours": {
+    "start": "08:00",
+    "end": "17:00"
+  },
+  "work_days": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "idle_threshold_seconds": 300,
+  "git": {
+    "enabled": true,
+    "scan_roots": [
+      "~/code"
+    ],
+    "scan_max_depth": 4,
+    "extra_author_emails": [
+      "you@example.com"
+    ],
+    "repo_cache_hours": 24,
+    "exclude_dir_names": [
+      "node_modules",
+      "Library",
+      ".Trash",
+      "Applications",
+      ".venv",
+      "venv",
+      ".tox",
+      "vendor",
+      "Pods",
+      ".cache",
+      "CloudStorage",
+      "Music",
+      "Movies",
+      "Pictures",
+      "site-packages"
+    ]
+  },
+  "shell": {
+    "enabled": true,
+    "history_files": [
+      "~/.zsh_history",
+      "~/.bash_history"
+    ],
+    "max_commands": 200,
+    "ignore_patterns": [
+      "^\\s*(ls|cd|pwd|clear|exit|ll|la)\\b",
+      "^\\s*$"
+    ]
+  },
+  "activity": {
+    "enabled": true,
+    "min_minutes_to_report": 3,
+    "max_titles_per_app": 8,
+    "exclude_apps": [
+      "1Password",
+      "Keychain Access",
+      "Messages",
+      "Signal",
+      "WhatsApp",
+      "FaceTime",
+      "Steam",
+      "steam_osx",
+      "Steam Helper",
+      "Spotify",
+      "zoom.us",
+      "Zoom",
+      "Zoom Workplace",
+      "ZoomClips",
+      "ZoomPhone",
+      "Telegram",
+      "Telegram Desktop"
+    ],
+    "vendor_exclude_prefixes": [
+      "com.apple."
+    ],
+    "vendor_allow_bundles": [
+      "com.apple.Notes",
+      "com.apple.reminders",
+      "com.apple.systempreferences",
+      "com.apple.iCal",
+      "com.apple.ActivityMonitor",
+      "com.apple.Terminal"
+    ],
+    "exclude_title_patterns": [
+      "(?i)\\bbank\\b",
+      "(?i)password",
+      "(?i)\\bpayroll\\b",
+      "(?i)incognito",
+      "(?i)private browsing"
+    ],
+    "sample_gap_cap_minutes": 2,
+    "meeting_apps": [
+      "MSTeams",
+      "Microsoft Teams",
+      "Webex"
+    ]
+  },
+  "unjoined_meetings": {
+    "enabled": true,
+    "app": "Microsoft Outlook"
+  },
+  "calendar": {
+    "enabled": true,
+    "ics_url_file": "~/.worklog/calendar_url",
+    "ics_path": "~/.worklog/calendar.ics",
+    "fetch_timeout_seconds": 30,
+    "include_all_day": false,
+    "include_free": false,
+    "include_out_of_office": true,
+    "prefer": "auto",
+    "outlook_calendar_index": 1,
+    "timeout_seconds": 60
+  },
+  "mis_board": {
+    "enabled": true,
+    "path": "~/.worklog/tracker-export.xlsx",
+    "sheet": "Work items",
+    "owner_column": "Owners",
+    "owner_match": "Your Name",
+    "date_column": "Created",
+    "date_format": "%d/%m/%Y",
+    "weekly_export": true
+  },
+  "claude_code": {
+    "enabled": true,
+    "projects_dir": "~/.claude/projects",
+    "max_prompts_per_session": 20,
+    "prompt_truncate_chars": 300,
+    "max_files_per_session": 12,
+    "max_commands_per_session": 14,
+    "exclude_projects": [
+      "/"
+    ]
+  },
+  "cloud": {
+    "enabled": true,
+    "scan_roots": [
+      "~/Library/CloudStorage"
+    ],
+    "scan_max_depth": 6,
+    "max_files": 80,
+    "ignore_names": [
+      ".DS_Store",
+      "Icon\r",
+      "desktop.ini",
+      ".tmp"
+    ],
+    "ignore_patterns": [
+      "^~\\$",
+      "\\.tmp$",
+      "\\.crdownload$",
+      "\\.partial$",
+      "/\\.git/",
+      "/Work Log/"
+    ]
+  },
+  "claude_export": {
+    "enabled": true,
+    "inbox_dir": "~/.worklog/inbox",
+    "max_conversations": 40
+  },
+  "summarizer": {
+    "mode": "claude_cli",
+    "claude_binary": "claude",
+    "model": "",
+    "timeout_seconds": 240,
+    "attempts": 3,
+    "retry_delay_seconds": 30,
+    "include_next_up": false
+  },
+  "repair": {
+    "enabled": true,
+    "lookback_days": 7,
+    "max_days_per_run": 3
+  },
+  "health": {
+    "enabled": true,
+    "sample_interval_seconds": 60,
+    "min_sample_ratio": 0.5
+  },
+  "weekly": {
+    "enabled": true
+  },
+  "redaction": {
+    "enabled": true,
+    "extra_patterns": []
+  },
+  "notifications": {
+    "enabled": true,
+    "sound": "Glass",
+    "click_opens_log": true
+  },
+  "pause": {
+    "reminder_minutes": 30
+  },
+  "tracker": {
+    "agents": [
+      "Project A",
+      "Project B",
+      "-- replace with your tracker's project dropdown --"
+    ],
+    "default_owner": "Your Name",
+    "agent_hints": "Optional free text telling the summarizer how to choose between similar projects.",
+    "section_title": "Status Tracker"
+  }
+}

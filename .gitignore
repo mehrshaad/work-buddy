@@ -1,0 +1,16 @@
+# collected data and runtime state — the engine is what's worth versioning
+raw/
+logs/
+inbox/
+bin/__pycache__/
+repo-cache.json
+report.lock
+config.json.new
+calendar.ics
+calendar_url
+*.xlsx
+config.json
+pauses.jsonl
+pause.json
+com.worklog.*.plist
+com.workbuddy.*.plist
