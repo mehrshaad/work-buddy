@@ -68,9 +68,11 @@ def menubar(size, asleep=False):
     s = size * SS
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    pad = s * 0.05
-    d.rounded_rectangle([pad, pad, s - pad, s - pad], radius=s * 0.28, fill=black)
-    cy, dx, r = s * 0.46, s * 0.17, s * 0.095
+    # generous transparent margin: SwiftBar renders this at the bar's full height, so
+    # a glyph drawn edge to edge looks enormous next to normal menu bar icons
+    pad = s * 0.20
+    d.rounded_rectangle([pad, pad, s - pad, s - pad], radius=s * 0.17, fill=black)
+    cy, dx, r = s * 0.50, s * 0.115, s * 0.062
     for cx in (s / 2 - dx, s / 2 + dx):
         if asleep:
             h = r * 0.62

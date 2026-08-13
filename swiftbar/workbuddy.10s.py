@@ -99,7 +99,11 @@ if paused:
 else:
     for mins, text in ((15, "15 minutes"), (30, "30 minutes"), (60, "1 hour")):
         act(f"⏸  Pause {text}", "pause", "--minutes", str(mins))
-    act("⏸  Pause until end of day", "pause", "--until", "17:00")
+    if st.get("work_time"):
+        # labelled with the configured end so it never implies a hardcoded clock time
+        end = (jrun("config", "get", "work_hours") or {}).get("end", "")
+        act(f"⏸  Pause until end of day{f' ({end})' if end else ''}",
+            "pause", "--rest-of-day")
     act("⏸  Pause until I resume", "pause", "--indefinite")
 
 # -------------------------------------------------------------------- today ----

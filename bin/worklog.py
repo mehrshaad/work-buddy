@@ -237,6 +237,18 @@ def paused_minutes(cfg: dict, day: date_cls, lo: datetime, hi: datetime) -> floa
     return total
 
 
+def next_window_start(cfg: dict, now: datetime) -> datetime | None:
+    """Start of the next work window after `now` — when tracking should resume."""
+    for i in range(0, 9):
+        day = (now + timedelta(days=i)).date()
+        if day.isoweekday() not in cfg["work_days"]:
+            continue
+        start, _ = window_bounds(cfg, day)
+        if start > now:
+            return start
+    return None
+
+
 def start_pause(cfg: dict, minutes: float | None = None,
                 until: datetime | None = None, reason: str = "") -> dict:
     """Begin a pause. No `minutes`/`until` means indefinite, bounded by the workday."""
@@ -244,10 +256,15 @@ def start_pause(cfg: dict, minutes: float | None = None,
     if minutes:
         until = now + timedelta(minutes=float(minutes))
     if until is None:
-        # An open-ended pause still expires at the end of the workday: the worst case
-        # then costs one day, not a silently untracked week.
-        _, day_end = window_bounds(cfg, now.date())
-        until = day_end if day_end > now else None
+        # An open-ended pause always gets a bound, or forgetting it costs untracked
+        # weeks. Inside the work window it runs to the end of today. Outside it, it
+        # expires when the next workday BEGINS — the sampler is idle overnight anyway,
+        # and bounding to the next window's end instead would quietly eat that day.
+        start_w, end_w = window_bounds(cfg, now.date())
+        if now.isoweekday() in cfg["work_days"] and start_w <= now < end_w:
+            until = end_w
+        else:
+            until = next_window_start(cfg, now)
         indefinite = True
     else:
         indefinite = False
@@ -3252,11 +3269,20 @@ def cmd_pause(cfg: dict, args) -> int:
         print("already paused — `worklog resume` to start tracking again")
         return 0
     until = None
-    if getattr(args, "until", None):
+    if getattr(args, "rest_of_day", False):
+        _, day_end = window_bounds(cfg, now.date())
+        if now.isoweekday() not in cfg["work_days"] or day_end <= now:
+            # Nothing left to pause: the sampler is already idle outside the window,
+            # and rolling to tomorrow would silently pause for most of a day.
+            print("already outside work hours — nothing to pause")
+            return 0
+        until = day_end
+    elif getattr(args, "until", None):
         h, m = parse_hhmm(args.until)
         until = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if until <= now:
             until += timedelta(days=1)
+            log_line(cfg, f"pause: --until {args.until} is past, treating it as tomorrow")
     rec = start_pause(cfg, minutes=getattr(args, "minutes", None), until=until,
                       reason=getattr(args, "reason", "") or "")
     if not args.quiet:
@@ -3481,6 +3507,8 @@ def main() -> int:
     g = q.add_mutually_exclusive_group()
     g.add_argument("--minutes", type=float, help="pause for this many minutes")
     g.add_argument("--until", help="pause until HH:MM")
+    g.add_argument("--rest-of-day", action="store_true",
+                   help="pause until the end of today's work window")
     g.add_argument("--indefinite", action="store_true",
                    help="pause until resumed (still ends at the workday's end)")
     q.add_argument("--reason", default="", help="note stored with the pause window")

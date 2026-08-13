@@ -342,6 +342,9 @@ def _win(a, b):
 
 
 check("no pause means no active pause", W.active_pause(_cfgp, _N) is None)
+check("rest-of-day refuses outside the work window rather than pausing until tomorrow",
+      "rest_of_day" in Path(W.__file__).read_text()
+      and "nothing to pause" in Path(W.__file__).read_text())
 check("no pause means no windows", W.pause_windows(_cfgp, D(2026, 8, 12)) == [])
 check("status line reads tracking when clear", W.pause_status_line(_cfgp, _N) == "tracking")
 
@@ -359,10 +362,31 @@ check("the window is appended to history",
 # an indefinite pause must still expire at the end of the workday
 _r2 = W.start_pause(_cfgp)
 check("an indefinite pause is flagged as such", _r2["indefinite"])
-_end = W.window_bounds(_cfgp, D.today())[1]
-check("an indefinite pause is bounded by the workday",
-      _r2["until"] is None or datetime.fromisoformat(_r2["until"]) <= _end,
-      str(_r2["until"]))
+_now2 = datetime.now()
+_ws, _we = W.window_bounds(_cfgp, _now2.date())
+_inside = _now2.isoweekday() in _cfgp["work_days"] and _ws <= _now2 < _we
+_expect = _we if _inside else W.next_window_start(_cfgp, _now2)
+check("an indefinite pause ends at today's close inside hours, else at the next start",
+      _r2["until"] is not None
+      and datetime.fromisoformat(_r2["until"]) == _expect,
+      f"{_r2['until']} vs {_expect}")
+W.end_pause(_cfgp)
+
+# an indefinite pause is ALWAYS bounded, whatever time of day it is started
+check("next_window_start skips to tomorrow after hours",
+      W.next_window_start(_cfgp, datetime(2026, 8, 13, 17, 53)) == datetime(2026, 8, 14, 8, 0),
+      str(W.next_window_start(_cfgp, datetime(2026, 8, 13, 17, 53))))
+check("next_window_start skips the weekend",
+      W.next_window_start(_cfgp, datetime(2026, 8, 15, 12, 0)) == datetime(2026, 8, 17, 8, 0),
+      str(W.next_window_start(_cfgp, datetime(2026, 8, 15, 12, 0))))
+_r3 = W.start_pause(_cfgp)
+_u3 = _r3["until"]
+check("an indefinite pause started after hours is still bounded", _u3 is not None, str(_u3))
+if _u3:
+    _hrs = (datetime.fromisoformat(_u3) - datetime.now()).total_seconds() / 3600
+    # bounding to the next window's END would swallow a whole workday unnoticed,
+    # because the reminder cannot fire while the sampler is idle overnight
+    check("an evening indefinite pause does not eat the next workday", _hrs <= 16, f"{_hrs:.1f}h")
 W.end_pause(_cfgp)
 
 # an expired pause retires itself on sight rather than lingering
