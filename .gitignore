@@ -14,3 +14,4 @@ pauses.jsonl
 pause.json
 com.worklog.*.plist
 com.workbuddy.*.plist
+old-agents/

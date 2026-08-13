@@ -313,14 +313,20 @@ else:
 
 # --------------------------------------------------------------------- agents --
 for _lbl, _cmd in (("summarize", "report"), ("catchup", "repair"), ("tracker", "sample")):
-    _pl = Path.home() / f"Library/LaunchAgents/com.worklog.{_lbl}.plist"
+    _pl = Path.home() / f"Library/LaunchAgents/com.workbuddy.{_lbl}.plist"
     check(f"{_lbl} agent is installed", _pl.is_file())
     if _pl.is_file():
         check(f"{_lbl} agent runs `{_cmd}`", f"<string>{_cmd}</string>" in _pl.read_text())
-_cu = Path.home() / "Library/LaunchAgents/com.worklog.catchup.plist"
+_cu = Path.home() / "Library/LaunchAgents/com.workbuddy.catchup.plist"
 if _cu.is_file():
+    import plistlib as _plib
+    _d = _plib.load(open(_cu, "rb"))
     check("catchup runs at 10:00 on five weekdays",
-          _cu.read_text().count("<key>Hour</key><integer>10</integer>") == 5)
+          sorted((x["Weekday"], x["Hour"]) for x in _d["StartCalendarInterval"])
+          == [(i, 10) for i in range(1, 6)],
+          str(_d["StartCalendarInterval"]))
+    check("no stale com.worklog agent is still loaded",
+          not list((Path.home()/"Library/LaunchAgents").glob("com.worklog.*.plist")))
 
 # ---------------------------------------------------------------------- pause --
 _ps = TMP / "pause"; (_ps / "logs").mkdir(parents=True, exist_ok=True)
