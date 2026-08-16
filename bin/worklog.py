@@ -3421,7 +3421,7 @@ def cmd_config(cfg: dict, args) -> int:
     if action in ("exclude-app", "include-app"):
         # `config exclude-app Notes` puts the name in the first positional, while
         # `config set k v` uses both, so accept it from either slot
-        name = ((args.key or "") + " " + (args.value or "")).strip()
+        name = " ".join([args.key or ""] + list(args.value or [])).strip()
         if not name:
             die("give an app name")
         lst = acfg.setdefault("exclude_apps", [])
@@ -3451,10 +3451,11 @@ def cmd_config(cfg: dict, args) -> int:
     if action == "set":
         if not args.key:
             die("give a dotted key, e.g. work_hours.end")
+        raw = " ".join(args.value) if isinstance(args.value, list) else args.value
         try:
-            val = json.loads(args.value)
+            val = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            val = args.value
+            val = raw
         node = cfg
         parts = args.key.split(".")
         for part in parts[:-1]:
@@ -3467,6 +3468,30 @@ def cmd_config(cfg: dict, args) -> int:
         print(f"{args.key} = {json.dumps(val)} ({where.name})")
         return 0
     die(f"unknown config action {action}")
+
+
+def cmd_open(cfg: dict, args) -> int:
+    """Open a log or folder in Finder.
+
+    Exists so the menu bar never has to pass a path as a parameter: SwiftBar splits
+    parameters on whitespace, and the output folder usually has a space in its name.
+    """
+    out_dir = expand(cfg["output_dir"])
+    if args.what == "folder":
+        target = out_dir
+    elif args.what == "config":
+        target = expand(cfg["state_dir"]) / "config.json"
+    else:
+        target = out_dir / f"{resolve_day(getattr(args, 'date', None)).isoformat()}.md"
+        if not target.is_file():
+            target = out_dir
+    rc, _, err = run(["/usr/bin/open", str(target)], timeout=20)
+    if rc != 0:
+        log_line(cfg, f"open: failed for {target} — {err[:200]}")
+        print(f"could not open {target}")
+        return 1
+    print(str(target))
+    return 0
 
 
 def cmd_notify_test(cfg: dict, args) -> int:
@@ -3530,7 +3555,13 @@ def main() -> int:
     q = sub.add_parser("config", help="read or change settings")
     q.add_argument("action", choices=["get", "set", "exclude-app", "include-app"])
     q.add_argument("key", nargs="?", default="")
-    q.add_argument("value", nargs="?", default="")
+    # an app name arrives as several words because parameters cannot contain spaces
+    q.add_argument("value", nargs="*", default=[])
+
+    q = sub.add_parser("open", help="open a log or folder in Finder")
+    q.add_argument("what", nargs="?", default="log",
+                   choices=["log", "folder", "config"])
+    q.add_argument("--date", default="today")
     sub.add_parser("init", help="autodetect git repo locations into config")
     sub.add_parser("notify-test", help="send a test notification")
 
@@ -3539,7 +3570,7 @@ def main() -> int:
     return {"sample": cmd_sample, "report": cmd_report, "digest": cmd_digest,
             "doctor": cmd_doctor, "repair": cmd_repair, "weekly": cmd_weekly,
             "pause": cmd_pause, "resume": cmd_resume, "status": cmd_status,
-            "apps": cmd_apps, "config": cmd_config,
+            "apps": cmd_apps, "config": cmd_config, "open": cmd_open,
             "init": cmd_init, "notify-test": cmd_notify_test}[args.cmd](cfg, args)
 
 

@@ -143,7 +143,7 @@ for a in apps[:22]:
     mark = "☒" if a["excluded"] else "☑"
     verb = "include-app" if a["excluded"] else "exclude-app"
     mins = f"  ({a['minutes']}m)" if a.get("minutes") else ""
-    act(f"--{mark}  {a['app']}{mins}", "config", verb, a["app"].replace(" ", "\\ "))
+    act(f"--{mark}  {a['app']}{mins}", "config", verb, *a["app"].split())
 print(f"--- | {FONT}")
 print(f"--Ticked apps are recorded; unticked are ignored entirely | color=#7f8c8d {FONT}")
 
@@ -176,10 +176,9 @@ for key, name in (("git", "Git commits"), ("shell", "Shell history"),
 # ---------------------------------------------------------------- shortcuts ----
 print("---")
 act("Write today's report now", "report")
-today = st.get("today", "")
-outdir = cfg.get("output_dir") or "~/Documents/Work Log"
-log = Path(os.path.expanduser(outdir)) / f"{today}.md"
-if log.is_file():
-    print(f"Open today's log | bash=/usr/bin/open param1={log} terminal=false {FONT}")
-print(f"Open the log folder | bash=/usr/bin/open param1={log.parent} terminal=false {FONT}")
+# routed through the CLI rather than /usr/bin/open with a path: the output folder has a
+# space in its name, and a parameter containing one is split and silently mangled
+act("Open today's log", "open", "log")
+act("Open the log folder", "open", "folder")
+act("Edit the configuration", "open", "config")
 print(f"Refresh | refresh=true {FONT}")
