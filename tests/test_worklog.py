@@ -383,10 +383,17 @@ _r3 = W.start_pause(_cfgp)
 _u3 = _r3["until"]
 check("an indefinite pause started after hours is still bounded", _u3 is not None, str(_u3))
 if _u3:
-    _hrs = (datetime.fromisoformat(_u3) - datetime.now()).total_seconds() / 3600
-    # bounding to the next window's END would swallow a whole workday unnoticed,
-    # because the reminder cannot fire while the sampler is idle overnight
-    check("an evening indefinite pause does not eat the next workday", _hrs <= 16, f"{_hrs:.1f}h")
+    # The real invariant is not a fixed number of hours — a Friday evening pause
+    # legitimately runs to Monday, because the sampler is idle all weekend anyway.
+    # It is that the bound never reaches past the moment tracking should resume:
+    # bounding to the next window's END instead would swallow a whole workday.
+    _u3d = datetime.fromisoformat(_u3)
+    _now3 = datetime.fromisoformat(_r3["started"])
+    _ws3, _we3 = W.window_bounds(_cfgp, _now3.date())
+    _inside3 = _now3.isoweekday() in _cfgp["work_days"] and _ws3 <= _now3 < _we3
+    check("an indefinite pause never runs past the next work window start",
+          _u3d == (_we3 if _inside3 else W.next_window_start(_cfgp, _now3)),
+          f"{_u3d} (started {_now3}, inside hours: {_inside3})")
 W.end_pause(_cfgp)
 
 # "end of day" is the calendar day, and a separate mode waits for the next window
