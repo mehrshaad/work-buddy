@@ -34,6 +34,7 @@ paused.
 | Meetings you were booked for | a published calendar `.ics` feed or a saved export |
 | Git commits | every repo under your scan roots, filtered to your own author emails |
 | Claude Code sessions | title, branch, files changed, what each command was for, where you left off |
+| Claude Code token usage | turns, cache-read, context size and sessions carrying hundreds of turns of old context — read from the ledger [tokenwise](https://github.com/kushalsamani/tokenwise) keeps, if it is installed |
 | Files touched | your cloud-sync folders |
 | Shell history | timestamped entries only |
 | Tracker export | tasks you logged yourself, read from a spreadsheet export |
@@ -95,6 +96,11 @@ cd ~/.worklog && ./install.sh
 `config.json` from the example, installs a `worklog` shim on your `PATH`, and links the
 menu bar plugin. The agents are generated rather than committed so no absolute paths end
 up in the repo.
+
+Optionally install [tokenwise](https://github.com/kushalsamani/tokenwise) into
+`~/.claude-tools/tokenwise` (or point `tokenwise.dir` at your checkout): the daily log gains a
+`Claude Code usage` block, the weekly rollup a usage summary, and the menu bar shows the live
+context size. Nothing is parsed twice — Work Buddy reads tokenwise's SQLite ledger.
 
 Then grant your `python3` binary **Accessibility** (to read window titles) and **Full Disk
 Access** (if your log folder is inside a cloud-sync directory), and check the wiring:

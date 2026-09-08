@@ -500,6 +500,62 @@ check("every timestamped collector consults the pause history",
 check("mis_board is knowingly unfiltered (rows carry a date, not a time)",
       "date_column" in (CFG.get("mis_board") or {}))
 
+# ----------------------------------------------------------------- tokenwise --
+_tw_day = D(2026, 9, 4)
+check("tokenwise window is expressed in UTC",
+      W._utc_str(datetime(2026, 9, 4, 8, 0)) ==
+      datetime(2026, 9, 4, 8, 0).astimezone(W.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"))
+check("fmt_tokens rounds the way the ledger does",
+      (W.fmt_tokens(950), W.fmt_tokens(1234), W.fmt_tokens(950_000),
+       W.fmt_tokens(2_430_000_000)) == ("950", "1K", "950K", "2.43B"))
+check("tokenwise disabled reports so",
+      W.collect_tokenwise({**CFG, "tokenwise": {**CFG.get("tokenwise", {}), "enabled": False}},
+                          _tw_day)["reason"] == "disabled")
+_missing = W.collect_tokenwise({**CFG, "tokenwise": {"enabled": True, "dir": str(TMP)}}, _tw_day)
+check("tokenwise missing ledger is unavailable, not an error",
+      _missing.get("available") is False and "not found" in _missing.get("reason", ""))
+check("the summary prompt asks for a usage block and forbids tracker rows from it",
+      "`Claude Code usage`" in W.SUMMARY_PROMPT and "never turn them" in W.SUMMARY_PROMPT)
+_tw = W.collect_tokenwise(CFG, _tw_day, ingest=False)
+if not (_tw.get("available") and _tw.get("turns")):
+    skip.append(f"tokenwise: no ledger turns on {_tw_day} ({_tw.get('reason', 'empty')})")
+else:
+    check("tokenwise count mirrors main-thread turns", _tw["count"] == _tw["turns"])
+    check("tokenwise sessions are ranked by cache-read",
+          [s["cache_read"] for s in _tw["sessions"]] ==
+          sorted((s["cache_read"] for s in _tw["sessions"]), reverse=True))
+    _thr = W.tokenwise_cfg(CFG)["long_session_turns"]
+    check("tokenwise long flag follows the configured threshold",
+          all(s["long"] == (s["turns_total"] >= _thr) for s in _tw["sessions"]))
+    check("tokenwise a session never has more turns today than in total",
+          all(s["turns_today"] <= s["turns_total"] for s in _tw["sessions"]))
+    check("tokenwise session_file joins to the claude_code collector's key",
+          all(s["session_file"].endswith(".jsonl") for s in _tw["sessions"]))
+    check("tokenwise projects carry no home prefix",
+          all(not s["project"].startswith("Users-") for s in _tw["sessions"]),
+          str([s["project"] for s in _tw["sessions"]])[:120])
+    check("tokenwise share over 400K is a percentage",
+          0 <= _tw["context"]["share_over_400k"] <= 100)
+    check("tokenwise cache-read total equals the model breakdown",
+          _tw["tokens"]["cache_read"] == sum(m["cache_read"] for m in _tw["by_model"].values()))
+    check("tokenwise advice appears only with a long session",
+          bool(_tw.get("advice")) == any(s["long"] for s in _tw["sessions"]))
+    # rendering: the fallback and the notification headline pick the block up
+    _raw = Path.home() / ".worklog" / "raw" / _tw_day.isoformat() / "digest.json"
+    if _raw.is_file():
+        _dg = json.loads(_raw.read_text())
+        _dg["sources"]["tokenwise"] = _tw
+        _md = W.render_fallback(CFG, _dg)
+        check("fallback renders the usage block", "**Claude Code usage**" in _md)
+        check("fallback names long sessions with a /clear hint",
+              ("/clear" in _md) == any(s["long"] for s in _tw["sessions"]))
+        check("headline mentions cache-read", "cache-read" in W.digest_headline(_dg))
+    else:
+        skip.append(f"tokenwise: no stored digest for {_tw_day} to render")
+    _wk = W.tokenwise_week(CFG, [_tw_day])
+    check("weekly usage lines start with the heading",
+          bool(_wk) and _wk[0] == "**Claude Code usage — week**" and len(_wk) >= 2, str(_wk)[:120])
+
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
 for s in skip:
     print(f"  SKIP  {s}")

@@ -124,6 +124,13 @@ print("---")
 print(f"Today | {FONT}")
 print(f"--Active: {st.get('active_today', '0m')} | {FONT}")
 print(f"--Meetings: {st.get('meetings_today', 0)} | {FONT}")
+tok = st.get("tokens_today")
+if tok:
+    print(f"--Claude Code: {tok['turns']} turns · {tok['cache_read']} cache-read · "
+          f"context now ~{tok['context_now'] // 1000}K | {FONT}")
+    if tok.get("long_sessions"):
+        print(f"--⚠ {tok['long_sessions']} session(s) carrying 300+ turns — /clear at the "
+              f"next task boundary | color=#e67e22 {FONT}")
 if st.get("current_meeting"):
     print(f"In a meeting: {st['current_meeting']} | color=#2980b9 {FONT}")
 degraded = st.get("degraded_days") or []
@@ -168,7 +175,8 @@ act("--↳ toggle", "config", "set", "menubar.show_label",
 print(f"--Sources | {FONT}")
 for key, name in (("git", "Git commits"), ("shell", "Shell history"),
                   ("calendar", "Calendar feed"), ("cloud", "OneDrive files"),
-                  ("claude_code", "Claude Code"), ("mis_board", "Tracker export")):
+                  ("claude_code", "Claude Code"), ("tokenwise", "Token ledger"),
+                  ("mis_board", "Tracker export")):
     on = bool((cfg.get(key) or {}).get("enabled"))
     act(f"----{'☑' if on else '☐'}  {name}", "config", "set", f"{key}.enabled",
         "false" if on else "true")

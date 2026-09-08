@@ -23,11 +23,12 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime, date as date_cls, timedelta
+from datetime import datetime, date as date_cls, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -438,6 +439,9 @@ def digest_headline(d: dict) -> str:
         bits.append(f"{n} CC session{'s' if n != 1 else ''}")
     if s["cloud"].get("count"):
         bits.append(f"{s['cloud']['count']} file{'s' if s['cloud']['count'] != 1 else ''}")
+    tw = s.get("tokenwise") or {}
+    if tw.get("turns"):
+        bits.append(f"{tw['cache_read_h']} cache-read")
     if s["activity"].get("active_duration"):
         bits.append(f"{s['activity']['active_duration']} active")
     return " · ".join(bits) if bits else "no activity captured"
@@ -1876,6 +1880,218 @@ def _dedupe_forked_sessions(cfg: dict, sessions: list[dict]) -> tuple[list[dict]
 # collector: OneDrive / SharePoint local sync
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# tokenwise: what the day's Claude Code sessions cost
+#
+# Read from the SQLite ledger that tokenwise (github.com/kushalsamani/tokenwise) keeps
+# from the same transcripts collect_claude_code reads. That collector records WHAT the
+# sessions did; this one records what they COST — turns, cache-read, context size — and
+# flags a session dragging hundreds of turns of old context into new work, which is the
+# one lever on the bill that the data supports. The ledger is tokenwise's; nothing here
+# parses a transcript twice.
+# --------------------------------------------------------------------------- #
+
+TOKENWISE_DEFAULTS = {"enabled": True, "dir": "~/.claude-tools/tokenwise",
+                      "long_session_turns": 300, "ingest_timeout_seconds": 120}
+
+
+def tokenwise_cfg(cfg: dict) -> dict:
+    return {**TOKENWISE_DEFAULTS, **(cfg.get("tokenwise") or {})}
+
+
+def tokenwise_paths(cfg: dict) -> tuple[Path, Path]:
+    """(ledger.py, ledger.db) for the configured checkout."""
+    tcfg = tokenwise_cfg(cfg)
+    root = expand(tcfg["dir"]) / "tokenwise"
+    db = expand(tcfg["db"]) if tcfg.get("db") else root / "ledger.db"
+    return root / "ledger.py", db
+
+
+def _utc_str(local_naive: datetime) -> str:
+    """Ledger timestamps are UTC ISO strings; compare the window in the same form."""
+    return (local_naive.astimezone().astimezone(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%S"))
+
+
+def fmt_tokens(n) -> str:
+    n = float(n or 0)
+    if n >= 1e9:
+        return f"{n / 1e9:.2f}B"
+    if n >= 1e6:
+        return f"{n / 1e6:.1f}M"
+    if n >= 1e3:
+        return f"{n / 1e3:.0f}K"
+    return str(int(n))
+
+
+def tokenwise_ingest(cfg: dict) -> bool:
+    """Pull new transcript lines into the ledger. Incremental; seconds, not minutes."""
+    ledger, _ = tokenwise_paths(cfg)
+    if not ledger.is_file():
+        return False
+    rc, out, err = run([sys.executable, str(ledger), "ingest"],
+                       timeout=tokenwise_cfg(cfg)["ingest_timeout_seconds"])
+    if rc != 0:
+        log_line(cfg, f"tokenwise: ingest failed rc={rc} {(err or out).strip()[:200]}")
+    return rc == 0
+
+
+def _tokenwise_price(ledger: Path):
+    """The ledger's own list-price table, so the two reports never disagree."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("tokenwise_ledger", ledger)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.price
+    except Exception:
+        return None
+
+
+def collect_tokenwise(cfg: dict, day: date_cls, bounds=None, ingest: bool = True) -> dict:
+    tcfg = tokenwise_cfg(cfg)
+    if not tcfg["enabled"]:
+        return {"available": False, "reason": "disabled"}
+    ledger, db = tokenwise_paths(cfg)
+    if not db.is_file():
+        return {"available": False,
+                "reason": f"{db} not found — install tokenwise into {tcfg['dir']}"}
+    if ingest:
+        tokenwise_ingest(cfg)
+
+    start, end = bounds or window_bounds(cfg, day)
+    a, b = _utc_str(start), _utc_str(end)
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        turns = [dict(r) for r in con.execute(
+            "SELECT session_id, project, is_subagent, ts, model, tok_in, tok_cc, tok_cr, "
+            "tok_out, ctx FROM turns WHERE ts BETWEEN ? AND ? ORDER BY ts", (a, b))]
+        tools = con.execute(
+            "SELECT name, COUNT(*) AS calls, COALESCE(SUM(result_chars), 0) AS chars "
+            "FROM tool_calls WHERE ts BETWEEN ? AND ? GROUP BY name ORDER BY chars DESC LIMIT 6",
+            (a, b)).fetchall()
+        prompts = con.execute("SELECT COUNT(*) FROM prompts WHERE ts BETWEEN ? AND ?",
+                              (a, b)).fetchone()[0]
+        # the hooks stamp their actions in LOCAL time, unlike the transcripts
+        handlers = {r["handler"]: r["n"] for r in con.execute(
+            "SELECT handler, COUNT(*) AS n FROM actions WHERE ts BETWEEN ? AND ? "
+            "GROUP BY handler ORDER BY n DESC",
+            (start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")))}
+        totals = {}
+        for sid in {t["session_id"] for t in turns if not t["is_subagent"]}:
+            totals[sid] = con.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id=? AND is_subagent=0",
+                (sid,)).fetchone()[0]
+        con.close()
+    except sqlite3.Error as exc:
+        return {"available": False, "reason": f"ledger unreadable ({exc})"}
+
+    turns, gone = drop_paused(pause_windows(cfg, day), turns, "ts")
+    if gone:
+        log_line(cfg, f"pause: hid {gone} Claude Code turn(s) of token usage on {day}")
+    main = [t for t in turns if not t["is_subagent"]]
+    if not main:
+        return {"available": True, "count": 0, "turns": 0, "session_count": 0,
+                "sessions": [], "handlers": handlers}
+
+    price = _tokenwise_price(ledger)
+    cost = (sum(price(t["model"], t["tok_in"] or 0, t["tok_cc"] or 0, t["tok_cr"] or 0,
+                      t["tok_out"] or 0) for t in turns) if price else None)
+    ctxs = sorted(t["ctx"] or 0 for t in main)
+    cr_all = sum(t["tok_cr"] or 0 for t in turns)
+    # the ledger names a project by its cwd with every non-alphanumeric turned into "-"
+    home = re.sub(r"[^A-Za-z0-9]", "-", str(Path.home()))
+    by_sess: dict = defaultdict(lambda: {"turns_today": 0, "cache_read": 0, "max_ctx": 0})
+    for t in main:
+        s = by_sess[t["session_id"]]
+        s["turns_today"] += 1
+        s["cache_read"] += t["tok_cr"] or 0
+        s["max_ctx"] = max(s["max_ctx"], t["ctx"] or 0)
+        s["project"] = (t["project"] or "").removeprefix(home).lstrip("-") or "?"
+    sessions = []
+    for sid, s in by_sess.items():
+        total = totals.get(sid, s["turns_today"])
+        sessions.append({
+            "session_file": f"{sid}.jsonl",       # joins to claude_code.sessions[].session_file
+            "project": s["project"],
+            "turns_today": s["turns_today"],
+            "turns_total": total,
+            "cache_read": s["cache_read"],
+            "cache_read_h": fmt_tokens(s["cache_read"]),
+            "max_ctx": s["max_ctx"],
+            "long": total >= int(tcfg["long_session_turns"]),
+        })
+    sessions.sort(key=lambda x: -x["cache_read"])
+    by_model: dict = defaultdict(lambda: {"turns": 0, "cache_read": 0})
+    for t in turns:
+        m = by_model[t["model"] or "?"]
+        m["turns"] += 1
+        m["cache_read"] += t["tok_cr"] or 0
+    over = sum(t["tok_cr"] or 0 for t in main if (t["ctx"] or 0) > 400_000)
+    out = {
+        "available": True,
+        "count": len(main),
+        "window_utc": [a, b],
+        "turns": len(main),
+        "subagent_turns": len(turns) - len(main),
+        "prompts": prompts,
+        "session_count": len(sessions),
+        "tokens": {"input": sum(t["tok_in"] or 0 for t in turns),
+                   "cache_write": sum(t["tok_cc"] or 0 for t in turns),
+                   "cache_read": cr_all,
+                   "output": sum(t["tok_out"] or 0 for t in turns)},
+        "cache_read_h": fmt_tokens(cr_all),
+        "cost_proxy_usd": round(cost, 2) if cost is not None else None,
+        "context": {"avg": int(sum(ctxs) / len(ctxs)),
+                    "median": int(ctxs[len(ctxs) // 2]),
+                    "max": ctxs[-1],
+                    "now": main[-1]["ctx"] or 0,
+                    "share_over_400k": round(100 * over / cr_all) if cr_all else 0},
+        "by_model": dict(by_model),
+        "sessions": sessions[:8],
+        "tools": [{"tool": r["name"], "calls": r["calls"],
+                   "result_tokens": int((r["chars"] or 0) / 4)} for r in tools],
+        "handlers": handlers,
+    }
+    long_ = [x for x in sessions if x["long"]]
+    if long_:
+        out["advice"] = (f"{len(long_)} session(s) carry {tcfg['long_session_turns']}+ turns "
+                         f"of context into every new prompt; /clear at the next task boundary.")
+    if gone:
+        out["paused_turns_dropped"] = gone
+    return out
+
+
+def tokenwise_week(cfg: dict, days: list) -> list[str]:
+    """Markdown lines summarising the week's Claude Code usage; empty when unavailable."""
+    per_day = [collect_tokenwise(cfg, d, ingest=False) for d in days]
+    per_day = [d for d in per_day if d.get("available") and d.get("turns")]
+    if not per_day:
+        return []
+    turns = sum(d["turns"] for d in per_day)
+    cr = sum(d["tokens"]["cache_read"] for d in per_day)
+    costs = [d["cost_proxy_usd"] for d in per_day if d.get("cost_proxy_usd") is not None]
+    avg_ctx = int(sum(d["context"]["avg"] * d["turns"] for d in per_day) / turns)
+    merged: dict = defaultdict(lambda: {"turns_week": 0, "cache_read": 0})
+    for d in per_day:
+        for s in d["sessions"]:
+            m = merged[s["session_file"]]
+            m["turns_week"] += s["turns_today"]
+            m["cache_read"] += s["cache_read"]
+            m["project"] = s["project"]
+            m["turns_total"] = s["turns_total"]
+    top = sorted(merged.items(), key=lambda kv: -kv[1]["cache_read"])[:3]
+    L = ["**Claude Code usage — week**",
+         f"- {turns:,} turns over {len(per_day)} day(s), {fmt_tokens(cr)} cache-read, "
+         f"avg context ~{avg_ctx // 1000}K"
+         + (f", ~${sum(costs):,.0f} list-price" if costs else "")]
+    for sf, m in top:
+        L.append(f"- {m['project']} ({sf[:8]}): {m['turns_week']:,} turns this week, "
+                 f"{fmt_tokens(m['cache_read'])} cache-read, {m['turns_total']:,} turns in total")
+    return L
+
+
 def collect_cloud(cfg: dict, day: date_cls, bounds=None) -> dict:
     ccfg = cfg["cloud"]
     if not ccfg["enabled"]:
@@ -2097,6 +2313,7 @@ def build_digest(cfg: dict, day: date_cls) -> dict:
             "unjoined_meetings": collect_unjoined_meetings(cfg, day, attended, calendar),
             "mis_board": collect_mis_board(cfg, day),
             "claude_code": collect_claude_code(cfg, day),
+            "tokenwise": collect_tokenwise(cfg, day),
             "cloud": collect_cloud(cfg, day),
             "claude_export": collect_claude_export(cfg, day),
         },
@@ -2199,6 +2416,15 @@ Then under Evidence, write compact sub-sections only for sources that have data:
     `left_off` in a few words when it says where things stand.
   Sessions in the same project on the same day are separate sessions — keep them separate.
   Do not invent progress that the evidence does not show.
+- `Claude Code usage` — from `tokenwise`, only when its `available` is true and `turns` > 0.
+  Two to four plain lines, no table. First the totals: `N turns over M sessions, X cache-read,
+  avg context ~YK, ~$Z list-price` (omit the price when `cost_proxy_usd` is null). Then one
+  line per session with `long: true`, named by the `claude_code` session sharing its
+  `session_file` (use that session's `title`, else the `project`), giving `turns_total` and
+  `cache_read_h` and ending "carried into every turn — /clear at the next task boundary".
+  Then, if `handlers` is non-empty, one line listing what the tokenwise hooks did, e.g.
+  `hooks: router 12, context_governor 2`. These figures are cost, not work: never turn them
+  into summary bullets or tracker rows.
 - `Files touched (OneDrive/SharePoint)` — up to 15 bullets of file names
 - `Focus time` — one line listing top apps with durations
 
@@ -2359,6 +2585,24 @@ def render_fallback(cfg: dict, d: dict) -> str:
                 L.append(f"  - skills: {', '.join(sess['skills_used'])}")
             if sess.get("left_off"):
                 L.append(f"  - left off: {sess['left_off']}")
+        L.append("")
+
+    tw = s.get("tokenwise") or {}
+    if tw.get("available") and tw.get("turns"):
+        L.append("**Claude Code usage**")
+        price = (f", ~${tw['cost_proxy_usd']:,.0f} list-price"
+                 if tw.get("cost_proxy_usd") is not None else "")
+        L.append(f"- {tw['turns']:,} turns over {tw['session_count']} session(s), "
+                 f"{tw['cache_read_h']} cache-read, avg context "
+                 f"~{tw['context']['avg'] // 1000}K{price}")
+        for sess in tw["sessions"]:
+            if sess.get("long"):
+                L.append(f"- {sess['project']} ({sess['session_file'][:8]}): "
+                         f"{sess['turns_total']:,} turns carried into every turn, "
+                         f"{sess['cache_read_h']} cache-read today — /clear at the next "
+                         f"task boundary")
+        if tw.get("handlers"):
+            L.append("- hooks: " + ", ".join(f"{k} {v}" for k, v in tw["handlers"].items()))
         L.append("")
 
     cl = s["cloud"]
@@ -3017,6 +3261,13 @@ def write_weekly(cfg: dict, day: date_cls) -> str | None:
              "|---|---|---|---|---|---|---|---|"]
             + [r for _, rows in per_day for r in rows])
 
+    usage = ""
+    try:
+        lines = tokenwise_week(cfg, days)
+        usage = ("\n".join(lines) + "\n\n") if lines else ""
+    except Exception as exc:  # a broken ledger must not kill the rollup
+        log_line(cfg, f"weekly: tokenwise failed {exc!r}")
+
     iso = day.isocalendar()
     name = f"{iso.year}-W{iso.week:02d}.md"
     span = f"{per_day[0][0].strftime('%-d %b')}–{per_day[-1][0].strftime('%-d %b %Y')}"
@@ -3025,6 +3276,7 @@ def write_weekly(cfg: dict, day: date_cls) -> str | None:
         f"<!-- worklog weekly {method} | generated "
         f"{datetime.now().isoformat(timespec='seconds')} -->\n\n"
         f"**{(cfg.get('tracker') or {}).get('section_title') or DEFAULT_SECTION} — week {iso.week}, {span}**\n\n{table}\n\n"
+        f"{usage}"
         f"_Merged from {len(per_day)} daily log(s): "
         f"{', '.join(d.isoformat() for d, _ in per_day)}._\n",
         encoding="utf-8")
@@ -3199,6 +3451,9 @@ def cmd_doctor(cfg: dict, args) -> int:
     print(f"state_dir  : {expand(cfg['state_dir'])}")
     print(f"claude CLI : {shutil.which(cfg['summarizer']['claude_binary']) or 'NOT FOUND'}")
     print(f"icalBuddy  : {shutil.which('icalBuddy') or 'not installed (optional)'}")
+    _tw_db = tokenwise_paths(cfg)[1]
+    print(f"tokenwise  : {_tw_db} "
+          f"({'ok' if _tw_db.is_file() else 'NOT FOUND — see tokenwise.dir in config'})")
     print(f"notify via : {'terminal-notifier' if shutil.which('terminal-notifier') else 'osascript (install terminal-notifier for reliability)'}")
     print(f"python3    : {sys.executable}   <- grant THIS Accessibility permission")
     print()
@@ -3334,6 +3589,16 @@ def cmd_status(cfg: dict, args) -> int:
         backlog = [d.isoformat() for d, _, _ in scan_backlog(cfg, day)]
     except Exception:
         pass
+    tokens = None
+    try:
+        # read-only: the hooks and the daily report keep the ledger fresh
+        tw = collect_tokenwise(cfg, day, ingest=False)
+        if tw.get("available") and tw.get("turns"):
+            tokens = {"turns": tw["turns"], "cache_read": tw["cache_read_h"],
+                      "context_now": tw["context"]["now"],
+                      "long_sessions": sum(1 for x in tw["sessions"] if x["long"])}
+    except Exception:
+        pass
     out = {
         "show_label": bool((cfg.get("menubar") or {}).get("show_label", True)),
         "menubar_style": (cfg.get("menubar") or {}).get("style", "symbol"),
@@ -3350,6 +3615,7 @@ def cmd_status(cfg: dict, args) -> int:
         "current_meeting": (live[-1]["title"] if live else None),
         "meetings_today": att.get("count") or 0,
         "degraded_days": backlog,
+        "tokens_today": tokens,
         "work_time": is_work_time(cfg, now),
         "today": day.isoformat(),
     }

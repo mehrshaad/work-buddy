@@ -138,6 +138,12 @@
       "/"
     ]
   },
+  "tokenwise": {
+    "enabled": true,
+    "dir": "~/.claude-tools/tokenwise",
+    "long_session_turns": 300,
+    "ingest_timeout_seconds": 120
+  },
   "cloud": {
     "enabled": true,
     "scan_roots": [
