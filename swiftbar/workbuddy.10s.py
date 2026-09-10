@@ -186,4 +186,17 @@ act("Write today's report now", "report")
 act("Open today's log", "open", "log")
 act("Open the log folder", "open", "folder")
 act("Edit the configuration", "open", "config")
+# optional untracked extras, so personal customizations stay out of the repo
+_extra = HOME / ".worklog" / "local" / "menu.sh"
+if _extra.is_file():
+    out, rc = "", 1
+    try:
+        r = subprocess.run(["/bin/sh", str(_extra)], capture_output=True, text=True,
+                           timeout=20)
+        out, rc = r.stdout.rstrip(), r.returncode
+    except Exception:
+        pass
+    if rc == 0 and out:
+        print(out)
+
 print(f"Refresh | refresh=true {FONT}")
