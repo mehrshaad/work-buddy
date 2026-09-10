@@ -3575,6 +3575,30 @@ def pause_status_line(cfg: dict, now: datetime | None = None) -> str:
     return f"paused {fmt_dur(max(left, 0))} left"
 
 
+# One setting drives the menu bar's whole presentation. It was two — an icon style and
+# a timer switch — which is two clicks and four states spread over two lines.
+MENUBAR_CYCLE = ("symbol+timer", "symbol", "buddy+timer", "buddy")
+MENUBAR_NAMES = {"symbol+timer": "symbol + timer", "symbol": "symbol only",
+                 "buddy+timer": "buddy + timer", "buddy": "buddy only"}
+
+
+def menubar_state(cfg: dict) -> dict:
+    """What the bar should show, plus the next value in the cycle."""
+    m = cfg.get("menubar") or {}
+    d = m.get("display")
+    if d not in MENUBAR_CYCLE:
+        # fall back to the two keys this replaced, so an older config still works
+        style = "buddy" if m.get("style") == "buddy" else "symbol"
+        d = f"{style}+timer" if m.get("show_label", True) else style
+    return {"menubar_display": d,
+            "menubar_display_name": MENUBAR_NAMES[d],
+            "menubar_next": MENUBAR_CYCLE[(MENUBAR_CYCLE.index(d) + 1) % len(MENUBAR_CYCLE)],
+            "menubar_next_name": MENUBAR_NAMES[
+                MENUBAR_CYCLE[(MENUBAR_CYCLE.index(d) + 1) % len(MENUBAR_CYCLE)]],
+            "menubar_style": "buddy" if d.startswith("buddy") else "symbol",
+            "show_label": d.endswith("+timer")}
+
+
 def cmd_status(cfg: dict, args) -> int:
     """One compact JSON object — the menu bar renders straight from this."""
     now = datetime.now()
@@ -3600,8 +3624,7 @@ def cmd_status(cfg: dict, args) -> int:
     except Exception:
         pass
     out = {
-        "show_label": bool((cfg.get("menubar") or {}).get("show_label", True)),
-        "menubar_style": (cfg.get("menubar") or {}).get("style", "symbol"),
+        **menubar_state(cfg),
         "paused": bool(p),
         "indefinite": bool(p and (p.get("indefinite") or not p.get("until"))),
         "until": (p or {}).get("until"),

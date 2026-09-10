@@ -216,7 +216,6 @@
     "section_title": "Status Tracker"
   },
   "menubar": {
-    "show_label": true,
-    "style": "symbol"
+    "display": "symbol+timer"
   }
 }
