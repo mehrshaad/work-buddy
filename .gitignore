@@ -16,3 +16,6 @@ com.worklog.*.plist
 com.workbuddy.*.plist
 old-agents/
 local/
+swiftbar/__pycache__/
+local/__pycache__/
+__pycache__/
