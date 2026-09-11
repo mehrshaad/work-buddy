@@ -167,5 +167,9 @@ fail when a source is not set up.
 - Redaction patterns strip anything that looks like a secret before it is written down.
 - Excluded apps leave no trace: not the name, not the window title, not the time.
 - Window titles matching your ignore patterns are dropped.
-- Paused stretches are absent from every source, not merely hidden in the summary.
+- Paused stretches are absent from every source, not merely hidden in the summary:
+  samples, commits, joined and booked meetings, Claude Code sessions and token usage,
+  cloud files, shell history and exported conversations. The one source a pause cannot
+  filter is the tracker export, whose rows carry a date but no time — those are tasks you
+  typed onto the board yourself, not activity observed on this machine.
 - The only outbound call is the summarization request; everything else is read locally.

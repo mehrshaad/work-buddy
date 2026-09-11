@@ -1212,6 +1212,13 @@ def _calendar_via_icalbuddy(day: date_cls, timeout: int) -> list[dict] | None:
 
 
 _OUTLOOK_SCRIPT = '''
+on pad2(n)
+  if n < 10 then return "0" & (n as string)
+  return n as string
+end pad2
+on isoDate(t)
+  return (year of t as string) & "-" & my pad2(month of t as integer) & "-" & my pad2(day of t) & "T" & my pad2(hours of t) & ":" & my pad2(minutes of t) & ":" & my pad2(seconds of t)
+end isoDate
 set d1 to (current date)
 set day of d1 to {day}
 set month of d1 to {month}
@@ -1230,7 +1237,7 @@ tell application "Microsoft Outlook"
             try
               set fb to free busy status of e as string
             end try
-            set out to out & (subject of e) & tab & ((start time of e) as string) & tab & ((end time of e) as string) & tab & fb & linefeed
+            set out to out & (subject of e) & tab & my isoDate(start time of e) & tab & my isoDate(end time of e) & tab & fb & linefeed
           end if
         end try
       end repeat
@@ -1247,6 +1254,13 @@ def _new_outlook_active() -> bool:
     return rc == 0 and out.strip() == "1"
 
 _CALENDAR_APP_SCRIPT = '''
+on pad2(n)
+  if n < 10 then return "0" & (n as string)
+  return n as string
+end pad2
+on isoDate(t)
+  return (year of t as string) & "-" & my pad2(month of t as integer) & "-" & my pad2(day of t) & "T" & my pad2(hours of t) & ":" & my pad2(minutes of t) & ":" & my pad2(seconds of t)
+end isoDate
 set d1 to (current date)
 set day of d1 to {day}
 set month of d1 to {month}
@@ -1259,7 +1273,7 @@ tell application "Calendar"
     try
       set evs to (every event of c whose start date is greater than or equal to d1 and start date is less than d2)
       repeat with e in evs
-        set out to out & (summary of e) & tab & ((start date of e) as string) & tab & ((end date of e) as string) & linefeed
+        set out to out & (summary of e) & tab & my isoDate(start date of e) & tab & my isoDate(end date of e) & linefeed
       end repeat
     end try
   end repeat
@@ -1574,13 +1588,18 @@ def collect_calendar(cfg: dict, day: date_cls) -> dict:
         return ics
     timeout = ccfg["timeout_seconds"]
     prefer = ccfg.get("prefer", "auto")
+    # a pause has to hide meetings too, and only timestamped events can be filtered
+    _pw = pause_windows(cfg, day)
 
     # an empty result from one source falls through to the next; only a
     # non-empty result short-circuits, so Outlook still gets asked when the
     # Apple calendar has no meetings on it
     empty_sources = []
 
-    if prefer in ("auto", "icalbuddy"):
+    # icalBuddy hands back one unstructured line per event, with no field a pause
+    # window could be compared against. Rather than leak paused meetings through it,
+    # skip the source entirely on a paused day and let a filterable one answer.
+    if prefer in ("auto", "icalbuddy") and not _pw:
         ib = _calendar_via_icalbuddy(day, timeout)
         if ib:
             return {"available": True, "source": "icalBuddy", "events": ib}
@@ -1612,6 +1631,9 @@ def collect_calendar(cfg: dict, day: date_cls) -> dict:
                 if status and status not in ("busy",):
                     ev["status"] = status  # tentative / out of office / free
                 events.append(ev)
+        events, gone = drop_paused(_pw, events, "start", "end")
+        if gone:
+            log_line(cfg, f"pause: hid {gone} calendar event(s) on {day}")
         if events:
             return {"available": True, "source": name, "events": events}
         empty_sources.append(name)
@@ -2216,6 +2238,9 @@ def collect_claude_export(cfg: dict, day: date_cls) -> dict:
             })
 
     convos.sort(key=lambda c: c["updated"])
+    convos, gone = drop_paused(pause_windows(cfg, day), convos, "updated")
+    if gone:
+        log_line(cfg, f"pause: hid {gone} exported conversation(s) on {day}")
     return {"available": True, "source_files": [f.name for f in files],
             "count": len(convos), "conversations": convos[: ecfg["max_conversations"]]}
 

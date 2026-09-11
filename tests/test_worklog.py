@@ -575,6 +575,29 @@ check("the pre-split config keys still resolve",
       ["menubar_display"] == "buddy")
 
 
+# -------------------------------------------------------- pause completeness --
+# Every collector that yields timestamped items must consult the pause history. A new
+# source that forgets to is exactly how paused personal time leaks into a work log.
+import inspect as _inspect
+_TIMESTAMPED = ["collect_meetings_attended", "collect_git", "collect_shell",
+                "collect_calendar_ics", "collect_calendar", "collect_claude_code",
+                "collect_tokenwise", "collect_cloud", "collect_claude_export"]
+for _fn in _TIMESTAMPED:
+    _src = _inspect.getsource(getattr(W, _fn))
+    check(f"{_fn} filters paused time", "drop_paused" in _src)
+# these two are exempt for a stated reason, not by oversight
+check("collect_activity needs no filter — the sampler writes nothing while paused",
+      "active_pause" in _inspect.getsource(W.cmd_sample))
+check("collect_unjoined_meetings reads only the sampler's own file",
+      "activity.jsonl" in _inspect.getsource(W.collect_unjoined_meetings))
+# icalBuddy returns unstructured text, so it must be skipped rather than filtered
+check("the icalBuddy source is skipped on a paused day",
+      'prefer in ("auto", "icalbuddy") and not _pw' in _inspect.getsource(W.collect_calendar))
+# the AppleScript calendar sources must emit ISO, or a pause window cannot match them
+for _t in ("_OUTLOOK_SCRIPT", "_CALENDAR_APP_SCRIPT"):
+    check(f"{_t} emits ISO timestamps", "my isoDate(" in getattr(W, _t))
+
+
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
 for s in skip:
     print(f"  SKIP  {s}")
