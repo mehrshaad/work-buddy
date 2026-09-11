@@ -598,6 +598,24 @@ for _t in ("_OUTLOOK_SCRIPT", "_CALENDAR_APP_SCRIPT"):
     check(f"{_t} emits ISO timestamps", "my isoDate(" in getattr(W, _t))
 
 
+# ------------------------------------------------- teams: which day is sent --
+# The staging agent runs on work days only, so "yesterday" would silently drop Friday:
+# Monday's yesterday is Sunday, and nothing ever reports Friday.
+_wd = {"work_days": [1, 2, 3, 4, 5]}
+check("Monday's summary covers Friday",
+      W.prev_workday(_wd, D(2026, 9, 14)) == D(2026, 9, 11))
+check("a midweek summary still covers the day before",
+      W.prev_workday(_wd, D(2026, 9, 10)) == D(2026, 9, 9))
+check("every work day reports a work day, never a weekend",
+      all(W.prev_workday(_wd, D(2026, 9, 7) + timedelta(days=i)).isoweekday() in _wd["work_days"]
+          for i in range(14)))
+check("no work day is skipped across a fortnight",
+      {W.prev_workday(_wd, D(2026, 9, 7) + timedelta(days=i)) for i in range(1, 15)}
+      >= {D(2026, 9, 7), D(2026, 9, 8), D(2026, 9, 9), D(2026, 9, 10), D(2026, 9, 11)})
+check("the teams command defaults to the previous work day, not to yesterday",
+      "prev_workday(cfg, date_cls.today())" in __import__("inspect").getsource(W.cmd_teams))
+
+
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
 for s in skip:
     print(f"  SKIP  {s}")

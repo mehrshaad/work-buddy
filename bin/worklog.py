@@ -4037,8 +4037,14 @@ def cmd_teams(cfg: dict, args) -> int:
     if not teams_cfg(cfg)["enabled"]:
         print("teams delivery is off - `worklog config set teams.enabled true`")
         return 1
-    # the summary is about a finished day, so it defaults to yesterday, not today
-    day = resolve_day(getattr(args, "date", None) or "yesterday")
+    # The summary covers a finished working day, which is not the same as yesterday:
+    # on Monday that is Friday. Walking back over the weekend is what stops Friday's
+    # report going unsent, since the staging agent only runs on work days itself.
+    arg = getattr(args, "date", None)
+    day = resolve_day(arg) if arg else prev_workday(cfg, date_cls.today())
+    if day is None:
+        print("no work days configured")
+        return 1
     if args.action == "prepare":
         return teams_prepare(cfg, day, args.quiet)
     if args.action == "send":
@@ -4112,8 +4118,9 @@ def main() -> int:
     q = sub.add_parser("teams", help="stage and send the day's summary to a Teams chat")
     q.add_argument("action", nargs="?", default="state",
                    choices=["prepare", "send", "show", "state"])
-    q.add_argument("--date", default="yesterday",
-                   help="YYYY-MM-DD | today | yesterday (default: yesterday)")
+    q.add_argument("--date", default=None,
+                   help="YYYY-MM-DD | today | yesterday "
+                        "(default: the previous work day, so Monday reports Friday)")
     q.add_argument("--dry-run", action="store_true",
                    help="print the message instead of sending it")
     q.add_argument("--quiet", action="store_true", help="send no notification")
