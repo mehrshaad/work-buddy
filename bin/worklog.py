@@ -3575,28 +3575,30 @@ def pause_status_line(cfg: dict, now: datetime | None = None) -> str:
     return f"paused {fmt_dur(max(left, 0))} left"
 
 
-# One setting drives the menu bar's whole presentation. It was two — an icon style and
-# a timer switch — which is two clicks and four states spread over two lines.
-MENUBAR_CYCLE = ("symbol+timer", "symbol", "buddy+timer", "buddy")
-MENUBAR_NAMES = {"symbol+timer": "symbol + timer", "symbol": "symbol only",
-                 "buddy+timer": "buddy + timer", "buddy": "buddy only"}
+# Two independent choices — which icon, and whether the timer sits beside it — kept in
+# one config string so there is a single key to read. Each menu toggle flips its own
+# half and leaves the other alone.
+MENUBAR_DISPLAYS = ("symbol+timer", "symbol", "buddy+timer", "buddy")
 
 
 def menubar_state(cfg: dict) -> dict:
-    """What the bar should show, plus the next value in the cycle."""
+    """What the bar should show, plus the value each toggle would set."""
     m = cfg.get("menubar") or {}
     d = m.get("display")
-    if d not in MENUBAR_CYCLE:
+    if d not in MENUBAR_DISPLAYS:
         # fall back to the two keys this replaced, so an older config still works
         style = "buddy" if m.get("style") == "buddy" else "symbol"
         d = f"{style}+timer" if m.get("show_label", True) else style
+    style = "buddy" if d.startswith("buddy") else "symbol"
+    timer = d.endswith("+timer")
     return {"menubar_display": d,
-            "menubar_display_name": MENUBAR_NAMES[d],
-            "menubar_next": MENUBAR_CYCLE[(MENUBAR_CYCLE.index(d) + 1) % len(MENUBAR_CYCLE)],
-            "menubar_next_name": MENUBAR_NAMES[
-                MENUBAR_CYCLE[(MENUBAR_CYCLE.index(d) + 1) % len(MENUBAR_CYCLE)]],
-            "menubar_style": "buddy" if d.startswith("buddy") else "symbol",
-            "show_label": d.endswith("+timer")}
+            "menubar_style": style,
+            "show_label": timer,
+            # flip the icon, keep the timer as it is
+            "menubar_toggle_style":
+                ("symbol" if style == "buddy" else "buddy") + ("+timer" if timer else ""),
+            # flip the timer, keep the icon as it is
+            "menubar_toggle_timer": style + ("" if timer else "+timer")}
 
 
 def cmd_status(cfg: dict, args) -> int:

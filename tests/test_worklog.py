@@ -556,6 +556,25 @@ else:
     check("weekly usage lines start with the heading",
           bool(_wk) and _wk[0] == "**Claude Code usage — week**" and len(_wk) >= 2, str(_wk)[:120])
 
+# ------------------------------------------------------------------ menu bar --
+# each toggle must flip its own half and leave the other alone, from every state
+for _d in W.MENUBAR_DISPLAYS:
+    _s = W.menubar_state({"menubar": {"display": _d}})
+    _ts = W.menubar_state({"menubar": {"display": _s["menubar_toggle_style"]}})
+    _tt = W.menubar_state({"menubar": {"display": _s["menubar_toggle_timer"]}})
+    check(f"menubar {_d}: the icon toggle flips only the icon",
+          _ts["menubar_style"] != _s["menubar_style"]
+          and _ts["show_label"] == _s["show_label"], _s["menubar_toggle_style"])
+    check(f"menubar {_d}: the timer toggle flips only the timer",
+          _tt["show_label"] != _s["show_label"]
+          and _tt["menubar_style"] == _s["menubar_style"], _s["menubar_toggle_timer"])
+check("an unset menu bar display falls back to symbol + timer",
+      W.menubar_state({})["menubar_display"] == "symbol+timer")
+check("the pre-split config keys still resolve",
+      W.menubar_state({"menubar": {"style": "buddy", "show_label": False}})
+      ["menubar_display"] == "buddy")
+
+
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
 for s in skip:
     print(f"  SKIP  {s}")

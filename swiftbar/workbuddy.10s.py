@@ -165,10 +165,11 @@ print(f"--Pause reminder: every {(cfg.get('pause') or {}).get('reminder_minutes'
 for n in (15, 30, 60, 0):
     act(f"----{'Never' if n == 0 else f'Every {n}m'}", "config", "set",
         "pause.reminder_minutes", str(n))
-# one line cycles the icon style and the timer together, instead of two settings
-print(f"--Menu bar: {st.get('menubar_display_name', 'symbol + timer')} | {FONT}")
-act(f"--↳ switch to {st.get('menubar_next_name', '')}",
-    "config", "set", "menubar.display", st.get("menubar_next", "symbol"))
+print(f"--Menu bar | {FONT}")
+act(f"----{'☑' if st.get('show_label', True) else '☐'}  Timer beside the icon",
+    "config", "set", "menubar.display", st.get("menubar_toggle_timer", "symbol"))
+act(f"----{'☑' if st.get('menubar_style') == 'buddy' else '☐'}  Buddy icon",
+    "config", "set", "menubar.display", st.get("menubar_toggle_style", "buddy+timer"))
 print(f"--Sources | {FONT}")
 for key, name in (("git", "Git commits"), ("shell", "Shell history"),
                   ("calendar", "Calendar feed"), ("cloud", "OneDrive files"),
