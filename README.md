@@ -81,6 +81,29 @@ worklog repair --dry-run     # what is degraded and why
 worklog repair               # fix it
 ```
 
+## Daily summary to a Teams chat
+
+Optional, off by default. Work Buddy can put the day's **Work update** section into a
+Microsoft Teams chat so it arrives as a plain message from you — no bot, no card frame.
+
+```
+worklog teams prepare      # repair the day if needed, then stage it
+worklog teams send         # post it
+worklog teams send --dry-run
+```
+
+It is review-first: a weekday morning agent runs `prepare` and nothing more, so a
+degraded summary never reaches a manager unread. Sending is a click in the menu bar.
+
+Delivery goes through a Power Automate flow you create yourself — no tenant admin
+consent needed. [docs/teams-daily-summary.md](docs/teams-daily-summary.md) is the full
+build guide, including the four traps in the flow designer that are invisible from the
+UI. Put the flow's URL in `~/.worklog/teams_url` (`chmod 600`; it is a bearer credential)
+and set `teams.enabled`, then re-run `./install.sh` to get the morning agent.
+
+Without a flow, a Teams deeplink is used instead: it pre-fills the compose box and you
+press Enter. Put your own address in `~/.worklog/teams_recipient` for that fallback.
+
 ## Install
 
 Requires macOS, Python 3.11+, the [Claude CLI](https://claude.com/claude-code) for
@@ -127,6 +150,7 @@ so system apps do not clutter the log.
 | `worklog status` | current state as JSON (what the menu bar renders) |
 | `worklog apps` | apps seen recently and whether each is recorded |
 | `worklog config set work_hours.end 18:00` | change a setting |
+| `worklog teams send` | post the staged summary to a Teams chat |
 | `worklog doctor` | check every source and permission |
 
 ## Tests

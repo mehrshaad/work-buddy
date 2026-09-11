@@ -59,6 +59,15 @@ agent com.workbuddy.tracker "$(printf '  <key>StartInterval</key><integer>60</in
 agent com.workbuddy.summarize "$(weekdays_at 17)" report
 agent com.workbuddy.catchup "$(weekdays_at 10)" repair
 
+# Optional: stage the Teams summary each weekday morning. It only stages — sending stays
+# a menu-bar click — so a degraded summary never reaches anyone unread.
+if python3 -c "import json,sys;sys.exit(0 if json.load(open('$ROOT/config.json')).get('teams',{}).get('enabled') else 1)" 2>/dev/null; then
+  agent com.workbuddy.teams "$(weekdays_at 9)" teams prepare --quiet
+else
+  launchctl bootout "gui/$(id -u)/com.workbuddy.teams" 2>/dev/null || true
+  rm -f "$AGENTS/com.workbuddy.teams.plist"
+fi
+
 PLUGINS="$HOME/Library/Application Support/SwiftBar/Plugins"
 if [ -d "$PLUGINS" ]; then
   ln -sf "$ROOT/swiftbar/workbuddy.10s.py" "$PLUGINS/workbuddy.10s.py"

@@ -10,6 +10,9 @@ calendar.ics
 calendar_url
 *.xlsx
 config.json
+teams_url
+teams_recipient
+teams/
 pauses.jsonl
 pause.json
 com.worklog.*.plist

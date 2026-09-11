@@ -217,5 +217,14 @@
   },
   "menubar": {
     "display": "symbol+timer"
+  },
+  "teams": {
+    "enabled": false,
+    "flow_url_file": "~/.worklog/teams_url",
+    "recipient_file": "~/.worklog/teams_recipient",
+    "staging_dir": "~/.worklog/teams",
+    "footer_name": "Work Buddy",
+    "footer_url": "https://github.com/mehrshaad/work-buddy",
+    "deeplink_max_chars": 4000
   }
 }

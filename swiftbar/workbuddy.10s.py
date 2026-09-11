@@ -179,6 +179,25 @@ for key, name in (("git", "Git commits"), ("shell", "Shell history"),
     act(f"----{'☑' if on else '☐'}  {name}", "config", "set", f"{key}.enabled",
         "false" if on else "true")
 
+# ------------------------------------------------------------ daily summary ----
+ts = jrun("teams")
+if ts and ts.get("date"):
+    print("---")
+    print(f"Daily summary | {FONT}")
+    if not ts["staged"]:
+        print(f"--Nothing staged for {ts['date']} | color=#7f8c8d {FONT}")
+        act("--Prepare it now", "teams", "prepare")
+    elif ts["sent"]:
+        at = (ts.get("sent_at") or "")[11:16]
+        print(f"--Sent {ts['date']} at {at} | color=#27ae60 {FONT}")
+        act("--Send it again", "teams", "send")
+    elif not ts["configured"]:
+        print(f"--Ready: {ts['date']} ({ts['lines']} lines) | color=#e67e22 {FONT}")
+        print(f"--No flow URL or recipient configured yet | color=#c0392b {FONT}")
+    else:
+        print(f"--Ready: {ts['date']} ({ts['lines']} lines) | color=#e67e22 {FONT}")
+        act("--Send it now", "teams", "send")
+
 # ---------------------------------------------------------------- shortcuts ----
 print("---")
 act("Write today's report now", "report")
