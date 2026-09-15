@@ -4166,6 +4166,10 @@ TIMESHEET_DEFAULTS = {"enabled": True,
                       "owner": "",
                       # "any activity at all" — a single credited minute fills the slot
                       "min_active_minutes": 0.01,
+                      # days that predate the sampler can still be placed from file
+                      # write times; Spotlight keeps them long after the power log
+                      "probe_filesystem": True,
+                      "max_files_probed": 20000,
                       # sampled from the reference sheet this was modelled on
                       "owner_bg": "FF2B7B90",      # teal band behind the name
                       "header_bg": "FF2A4A8B",     # navy date/weekday header
@@ -4183,14 +4187,62 @@ def timesheet_cfg(cfg: dict) -> dict:
     return t
 
 
+def timesheet_presence_from_files(cfg: dict, day: date_cls) -> list[float]:
+    """Slots in which a file was written — proof the machine was awake and in use.
+
+    The only presence signal that survives after the fact: pmset's log and wtmp are
+    both rotated within days, but Spotlight still knows when each file was last
+    changed. Restricted to the work window, because a machine left on overnight
+    writes caches and backups that say nothing about whether anyone was working.
+    """
+    out = [0.0] * SLOTS_PER_DAY
+    cache = expand(cfg["state_dir"]) / "raw" / day.strftime("%Y-%m-%d") / "presence.json"
+    if cache.is_file():
+        try:
+            return json.loads(cache.read_text())["slots"]
+        except (json.JSONDecodeError, KeyError):
+            pass
+    if not shutil.which("mdfind"):
+        return out
+    lo, hi = window_bounds(cfg, day)
+    nxt = day + timedelta(days=1)
+    q = (f"kMDItemFSContentChangeDate >= $time.iso({day.isoformat()}T00:00:00) && "
+         f"kMDItemFSContentChangeDate < $time.iso({nxt.isoformat()}T00:00:00)")
+    rc, listing, _ = run(["mdfind", q], timeout=120)
+    if rc != 0:
+        return out
+    tcfg = timesheet_cfg(cfg)
+    for line in listing.splitlines()[: int(tcfg["max_files_probed"])]:
+        try:
+            ts = datetime.fromtimestamp(os.stat(line).st_mtime)
+        except (OSError, ValueError):
+            continue
+        if ts.date() != day or not (lo <= ts <= hi):
+            continue
+        out[ts.hour * 2 + (1 if ts.minute >= 30 else 0)] += 30.0
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(
+        {"date": day.isoformat(), "source": "spotlight file mtimes",
+         "generated_at": datetime.now().isoformat(timespec="seconds"),
+         "slots": out}), encoding="utf-8")
+    return out
+
+
 def timesheet_day_slots(cfg: dict, day: date_cls) -> list[float]:
-    """Active minutes per half-hour slot for one day, using the sampler's own rules."""
+    """Minutes of presence per half-hour slot, using the sampler's own rules.
+
+    A timesheet records presence rather than keystrokes, so inside the work window a
+    sample of any kind counts: one exists only when the agent ran, which means the
+    machine was awake. Outside the window idleness is not counted, or a laptop left
+    on overnight would fill the small hours.
+    """
     out = [0.0] * SLOTS_PER_DAY
     path = expand(cfg["state_dir"]) / "raw" / day.strftime("%Y-%m-%d") / "activity.jsonl"
     if not path.is_file():
         return out
     acfg = cfg["activity"]
     cap = float(acfg.get("sample_gap_cap_minutes", 2))
+    lo, hi = window_bounds(cfg, day)
     samples = []
     for line in path.read_text(errors="replace").splitlines():
         if not line.strip():
@@ -4207,13 +4259,13 @@ def timesheet_day_slots(cfg: dict, day: date_cls) -> list[float]:
                if i + 1 < len(samples) else 1.0)
         gap = min(max(gap, 0.0), cap)
         app = rec.get("app") or ""
-        if app == EXCLUDED_APP or is_excluded_app(acfg, app, rec.get("bundle")):
-            continue                      # excluded apps are not time spent working
-        # A meeting window being open is presence even when the keyboard is still,
-        # which is the whole reason meetings are credited rather than measured.
-        if app == "(idle)" and not rec.get("meeting_windows"):
-            continue
         d = rec["_dt"]
+        in_hours = lo <= d <= hi
+        if app == "(idle)" and not rec.get("meeting_windows") and not in_hours:
+            continue        # a machine left on after hours is not after-hours work
+        if (app == EXCLUDED_APP or is_excluded_app(acfg, app, rec.get("bundle"))) \
+                and not in_hours:
+            continue        # an excluded app says nothing about work outside the day
         out[d.hour * 2 + (1 if d.minute >= 30 else 0)] += gap
     return out
 
@@ -4264,6 +4316,10 @@ def timesheet_from_digest(cfg: dict, day: date_cls) -> tuple[list[float], bool]:
         point(c.get("at") if isinstance(c, dict) else None)
     for f in (src.get("cloud") or {}).get("files") or []:
         point(f.get("modified") if isinstance(f, dict) else None)
+    # and whatever the filesystem still remembers about the machine being awake
+    if timesheet_cfg(cfg)["probe_filesystem"]:
+        for i, mins in enumerate(timesheet_presence_from_files(cfg, day)):
+            out[i] += mins
     return out, any(out)
 
 

@@ -715,6 +715,30 @@ else:
     check("only sample-less days are marked reconstructed",
           all(not (_raw / f"{D(_y, _m, _d):%Y-%m-%d}" / "activity.jsonl").is_file()
               for _d in _t["reconstructed"]))
+# presence, not keystrokes: inside the work window a sample of any kind counts,
+# because one only exists when the agent ran, which means the machine was awake
+_pdir2 = TMP / "presence"
+(_pdir2 / "raw" / "2026-03-04").mkdir(parents=True, exist_ok=True)
+_lo, _hi = W.window_bounds(CFG, D(2026, 3, 4))
+_mid = _lo.replace(minute=0) + timedelta(hours=1)
+_late = _hi + timedelta(hours=3)
+(_pdir2 / "raw" / "2026-03-04" / "activity.jsonl").write_text("\n".join(json.dumps(r) for r in [
+    {"ts": _mid.isoformat(), "app": "(idle)", "title": "", "idle": 600, "meeting_windows": []},
+    {"ts": (_mid + timedelta(minutes=1)).isoformat(), "app": "(idle)", "title": "",
+     "idle": 660, "meeting_windows": []},
+    {"ts": _late.isoformat(), "app": "(idle)", "title": "", "idle": 900, "meeting_windows": []},
+]) + "\n")
+_pcfg2 = {**CFG, "state_dir": str(_pdir2),
+          "timesheet": {**W.timesheet_cfg(CFG), "probe_filesystem": False}}
+_slots = W.timesheet_day_slots(_pcfg2, D(2026, 3, 4))
+_mid_slot = _mid.hour * 2 + (1 if _mid.minute >= 30 else 0)
+_late_slot = _late.hour * 2 + (1 if _late.minute >= 30 else 0)
+check("an idle sample inside work hours still counts as presence",
+      _slots[_mid_slot] > 0)
+check("an idle sample after hours does not", _slots[_late_slot] == 0)
+check("presence never invents slots nothing was sampled in",
+      sum(1 for v in _slots if v) == 1)
+
 # the workbook itself: dates and weekday labels must match the real calendar
 _tsc = W.timesheet_cfg(CFG)
 _book = W.expand(CFG["output_dir"]) / _tsc["path"]

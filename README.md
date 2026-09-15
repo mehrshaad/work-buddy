@@ -101,8 +101,12 @@ reach the sheet. The daily report is unaffected — it clamps itself to your wor
 which is what the after-hours addendum exists to complement.
 
 Days that predate the sampler are rebuilt from their stored evidence — commits,
-sessions and meetings — which is a **floor** on the hours rather than a measurement.
-Any sheet containing such days says so at the top.
+sessions and meetings — plus the times files were written on that day, which Spotlight
+still knows long after the power log and login records have rotated away. That is the
+only presence signal that survives after the fact, and it is restricted to your work
+hours, since a machine left on overnight writes caches that say nothing about work.
+It remains a **floor** on the hours rather than a measurement, and any sheet
+containing such days says so at the top.
 
 ## Daily summary to a Teams chat
 
@@ -195,7 +199,10 @@ fail when a source is not set up.
 ## Privacy
 
 - Redaction patterns strip anything that looks like a secret before it is written down.
-- Excluded apps leave no trace: not the name, not the window title, not the time.
+- Excluded apps leave no trace in the log: not the name, not the window title,
+  not the time. The monthly timesheet is the one exception — inside your work
+  hours it marks the slot, because the machine was demonstrably in use. It still
+  records only that, never what was on screen.
 - Window titles matching your ignore patterns are dropped.
 - Paused stretches are absent from every source, not merely hidden in the summary:
   samples, commits, joined and booked meetings, Claude Code sessions and token usage,
