@@ -786,6 +786,16 @@ else:
                 break
         if _ws.cell(1, 1).font.sz != 13 or _ws.cell(1, 1).font.name != _tsc["font"]:
             _wrong.append(f"{_name} name band font")
+        # a thin side with no colour renders black and reads as a heavy grid
+        _sides = _ws.cell(4, 2).border
+        if any(getattr(_sides, _sd).color is None
+               or getattr(_sides, _sd).color.rgb != _tsc["border"]
+               for _sd in ("left", "right", "top", "bottom")):
+            _wrong.append(f"{_name} border is not {_tsc['border']} on all four sides")
+        # the time column alternates, full hours darker than half hours
+        if (_ws.cell(4, 1).fill.fgColor.rgb != _tsc["label_bg"]
+                or _ws.cell(5, 1).fill.fgColor.rgb != _tsc["label_bg_half"]):
+            _wrong.append(f"{_name} time column does not alternate")
         if _ws.cell(2, 2).font.color.rgb != _tsc["header_fg"]:
             _wrong.append(f"{_name} header text colour")
         # totals must be live formulas, so a hand edit in the shared book recalculates

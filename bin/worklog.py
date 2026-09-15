@@ -4181,8 +4181,13 @@ TIMESHEET_DEFAULTS = {"enabled": True,
                       "header_weekend_bg": "FF8497B0",
                       "header_fg": "FFFFFFFF",
                       "label_bg": "FFD9E1F2",
+                      # the time column alternates so the half hours read as subordinate
+                      "label_bg_half": "FFEAEFF7",
                       "weekend_bg": "FFF2F2F2",
                       "grid_fg": "FF808080",
+                      # a thin side with no colour renders black, which reads as a
+                      # heavy grid; the tracker uses a light grey
+                      "border": "FFBFBFBF",
                       "mark_theme": 8, "mark_tint": 0.5999938962981048}
 
 
@@ -4397,6 +4402,7 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     head_fill = PatternFill("solid", fgColor=t["header_bg"])
     head_wknd = PatternFill("solid", fgColor=t["header_weekend_bg"])
     label_fill = PatternFill("solid", fgColor=t["label_bg"])
+    label_half = PatternFill("solid", fgColor=t["label_bg_half"])
     wknd_fill = PatternFill("solid", fgColor=t["weekend_bg"])
     F = t["font"]
     head_font = Font(name=F, sz=10, bold=True, color=t["header_fg"])
@@ -4406,7 +4412,7 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     cell_font = Font(name=F, sz=10, color=t["grid_fg"])
     centre = Alignment(horizontal="center", vertical="center")
     left = Alignment(horizontal="left", vertical="center")
-    thin = Side(style="thin")
+    thin = Side(style="thin", color=t["border"])
     box = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     def style(c, fill=None, font=None, align=centre, nf=None):
@@ -4448,7 +4454,7 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     for slot in range(SLOTS_PER_DAY):
         row = R_FIRST + slot
         style(ws.cell(row, 1, f"{slot // 2:02d}:{'30' if slot % 2 else '00'}"),
-              label_fill, label_font)
+              label_half if slot % 2 else label_fill, label_font)
         for d in range(ndays):
             c = ws.cell(row, 2 + d, "x" if data["grid"][slot][d] else None)
             style(c, wknd_fill if (2 + d) in weekend else None)
