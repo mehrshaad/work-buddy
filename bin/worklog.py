@@ -4166,9 +4166,13 @@ TIMESHEET_DEFAULTS = {"enabled": True,
                       "owner": "",
                       # "any activity at all" — a single credited minute fills the slot
                       "min_active_minutes": 0.01,
-                      "cyan": "FF00B0C7",
-                      "cyan_light": "FFD7F1F6",
-                      "weekend": "FFF2F2F2"}
+                      # sampled from the reference sheet this was modelled on
+                      "owner_bg": "FF2B7B90",      # teal band behind the name
+                      "header_bg": "FF2A4A8B",     # navy date/weekday header
+                      "header_fg": "FFFFFFFF",
+                      "label_bg": "FFD4DDF0",      # time labels and the totals column
+                      "mark_bg": "FFAED9E4",       # cyan behind an x
+                      "mark_fg": "FF1F3864"}
 SLOTS_PER_DAY = 48
 
 
@@ -4291,7 +4295,7 @@ def timesheet_month(cfg: dict, year: int, month: int) -> dict:
 def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     """Write or replace one month's sheet inside the single shared workbook."""
     from openpyxl import Workbook, load_workbook
-    from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
+    from openpyxl.formatting.rule import CellIsRule
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
@@ -4311,10 +4315,11 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     # sheets read most naturally in calendar order rather than the order they were built
     wb._sheets.sort(key=lambda sh: datetime.strptime(sh.title, "%b %Y"))
 
-    cyan = PatternFill("solid", fgColor=t["cyan"])
-    cyan_light = PatternFill("solid", fgColor=t["cyan_light"])
-    weekend_fill = PatternFill("solid", fgColor=t["weekend"])
-    white_bold = Font(bold=True, color="FFFFFFFF")
+    owner_fill = PatternFill("solid", fgColor=t["owner_bg"])
+    header_fill = PatternFill("solid", fgColor=t["header_bg"])
+    label_fill = PatternFill("solid", fgColor=t["label_bg"])
+    mark_fill = PatternFill("solid", fgColor=t["mark_bg"])
+    white_bold = Font(bold=True, color=t["header_fg"])
     bold = Font(bold=True)
     centre = Alignment(horizontal="center", vertical="center")
     thin = Side(style="thin", color="FFD0D7DE")
@@ -4323,50 +4328,57 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     last_col = 2 + ndays                              # A labels, B..(B+ndays-1), total
     total_col = get_column_letter(last_col)
 
-    ws.cell(1, 1, t["owner"]).font = bold
+    owner_cell = ws.cell(1, 1, t["owner"])
+    owner_cell.font = white_bold
+    for col in range(1, last_col + 1):
+        ws.cell(1, col).fill = owner_fill
     if data["reconstructed"]:
         note = ws.cell(1, 3, f"{len(data['reconstructed'])} of {ndays} days rebuilt from "
                              "commits, sessions and meetings - a floor on the hours, "
                              "not a measurement (the sampler was not running)")
         note.font = Font(italic=True, color="FF8A6D3B")
-    ws.cell(2, 1, "Date \u2192").font = bold
-    ws.cell(3, 1, "Time \u2193").font = bold
+    ws.cell(2, 1, "Date \u2192").font = white_bold
+    ws.cell(3, 1, "Time \u2193").font = white_bold
     ws.cell(2, last_col, "Slots").font = white_bold
     ws.cell(3, last_col, "Worked").font = white_bold
     for r in (2, 3):
-        ws.cell(r, last_col).fill = cyan
-        ws.cell(r, last_col).alignment = centre
+        for col in (1, last_col):
+            ws.cell(r, col).fill = header_fill
+            ws.cell(r, col).alignment = centre
+            ws.cell(r, col).border = box
 
-    weekend_cols = []
     for d in range(ndays):
         col = 2 + d
         day = date_cls(year, month, d + 1)
-        c1 = ws.cell(2, col, d + 1)
-        c2 = ws.cell(3, col, day.strftime("%a"))
-        for c in (c1, c2):
+        for c in (ws.cell(2, col, d + 1), ws.cell(3, col, day.strftime("%a"))):
             c.font = white_bold
-            c.fill = cyan
+            c.fill = header_fill
             c.alignment = centre
             c.border = box
-        if day.isoweekday() not in cfg["work_days"]:
-            weekend_cols.append(col)
 
     for slot in range(SLOTS_PER_DAY):
         row = 4 + slot
-        ws.cell(row, 1, f"{slot // 2:02d}:{'30' if slot % 2 else '00'}").font = bold
+        lab = ws.cell(row, 1, f"{slot // 2:02d}:{'30' if slot % 2 else '00'}")
+        lab.font = bold
+        lab.fill = label_fill
+        lab.alignment = centre
+        lab.border = box
         for d in range(ndays):
             c = ws.cell(row, 2 + d, "x" if data["grid"][slot][d] else None)
             c.alignment = centre
             c.border = box
-            if (2 + d) in weekend_cols and not data["grid"][slot][d]:
-                c.fill = weekend_fill
         tot = ws.cell(row, last_col, data["slot_totals"][slot])
         tot.alignment = centre
         tot.font = bold
+        tot.fill = label_fill
+        tot.border = box
 
     r_slots, r_hours, r_summary = 4 + SLOTS_PER_DAY, 5 + SLOTS_PER_DAY, 7 + SLOTS_PER_DAY
-    ws.cell(r_slots, 1, "Slots Worked").font = bold
-    ws.cell(r_hours, 1, "Hours Worked").font = bold
+    for r, label in ((r_slots, "Slots Worked"), (r_hours, "Hours Worked")):
+        c = ws.cell(r, 1, label)
+        c.font = bold
+        c.fill = label_fill
+        c.border = box
     for d in range(ndays):
         a = ws.cell(r_slots, 2 + d, data["day_totals"][d])
         b = ws.cell(r_hours, 2 + d, round(data["day_totals"][d] / 2, 1))
@@ -4377,8 +4389,9 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     hours = round(data["total_slots"] / 2, 1)
     ws.cell(r_hours, last_col, hours).font = bold
     for r in (r_slots, r_hours):
-        ws.cell(r, last_col).fill = cyan_light
+        ws.cell(r, last_col).fill = label_fill
         ws.cell(r, last_col).alignment = centre
+        ws.cell(r, last_col).border = box
 
     worked = data["days_worked"]
     pairs = [("Total Hours", hours),
@@ -4389,22 +4402,21 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
         lc = ws.cell(r_summary, 1 + i * 4, label)
         vc = ws.cell(r_summary, 3 + i * 4, value)
         lc.font = bold
+        lc.fill = label_fill
+        lc.border = box
         vc.font = bold
         vc.alignment = centre
-        vc.fill = cyan_light
+        vc.border = box
         if label == "% of Month":
             vc.number_format = "0.0%"
 
     grid_ref = f"B4:{get_column_letter(1 + ndays)}{3 + SLOTS_PER_DAY}"
+    # a differential fill is keyed on bgColor, not fgColor: pass fgColor here and the
+    # rule saves with no fill at all, so every x renders unshaded
     ws.conditional_formatting.add(grid_ref, CellIsRule(
-        operator="equal", formula=['"x"'], fill=cyan_light, font=Font(color=t["cyan"])))
-    # density at a glance: the busier the slot or the day, the stronger the blue
-    for ref in (f"{total_col}4:{total_col}{3 + SLOTS_PER_DAY}",
-                f"B{r_slots}:{get_column_letter(1 + ndays)}{r_slots}",
-                f"B{r_hours}:{get_column_letter(1 + ndays)}{r_hours}"):
-        ws.conditional_formatting.add(ref, ColorScaleRule(
-            start_type="min", start_color="FFFFFFFF",
-            end_type="max", end_color=t["cyan"]))
+        operator="equal", formula=['"x"'],
+        fill=PatternFill(bgColor=t["mark_bg"]),
+        font=Font(bold=True, color=t["mark_fg"])))
 
     ws.freeze_panes = "B4"
     ws.column_dimensions["A"].width = 13

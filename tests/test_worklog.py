@@ -316,8 +316,10 @@ else:
 # --------------------------------------------------------------------- agents --
 for _lbl, _cmd in (("summarize", "report"), ("catchup", "repair"), ("tracker", "sample")):
     _pl = Path.home() / f"Library/LaunchAgents/com.workbuddy.{_lbl}.plist"
-    check(f"{_lbl} agent is installed", _pl.is_file())
-    if _pl.is_file():
+    # a fresh checkout has not run install.sh yet, so absence is a skip, not a failure
+    if not _pl.is_file():
+        skip.append(f"agents: {_lbl} not installed (run ./install.sh)")
+    else:
         check(f"{_lbl} agent runs `{_cmd}`", f"<string>{_cmd}</string>" in _pl.read_text())
 _cu = Path.home() / "Library/LaunchAgents/com.workbuddy.catchup.plist"
 if _cu.is_file():
@@ -646,25 +648,32 @@ check("the automatic send is opt-in", 'if not t["auto_send"]' in _asrc)
 
 # --------------------------------------------- pause: ranges, not single days --
 # The addendum files Friday-evening-to-Monday-morning work under the Friday. A pause
-# taken on the Saturday touches no part of that Friday, so a day-only lookup used to
-# miss it and weekend work landed in the manager's report.
-_ph = W.pause_paths(CFG)[1]
-_hist = _ph.read_text(errors="replace") if _ph.is_file() else ""
-if "2026-09-12T11:27" not in _hist:
-    skip.append("pause: the weekend pause window is no longer in the history")
-else:
-    _fri, _mon = D(2026, 9, 11), D(2026, 9, 14)
-    _, _pe = W.window_bounds(CFG, _fri)
-    _ts, _ = W.window_bounds(CFG, _mon)
-    _day_only = W.pause_windows(CFG, _fri)
-    _ranged = W.pause_windows(CFG, _fri, (_pe, _ts))
-    check("a weekend pause is invisible to a Friday-only lookup",
-          not any(w[0].date() == D(2026, 9, 12) for w in _day_only))
-    check("the same pause is found when the range is passed",
-          any(w[0].date() == D(2026, 9, 12) for w in _ranged))
-    check("the addendum no longer reports a weekend spent paused",
-          "24 CC sessions" not in W.addendum_headline(
-              W.build_addendum(CFG, _fri, _mon)))
+# taken on the Saturday touches no part of that Friday, so a day-only lookup misses it
+# and weekend work lands in the report. Built from scratch here so the check holds on
+# any machine rather than depending on this one's pause history.
+_fri = D(2026, 1, 1)
+while _fri.isoweekday() != 5:
+    _fri += timedelta(days=1)
+_sat, _mon = _fri + timedelta(days=1), _fri + timedelta(days=3)
+_pdir = TMP / "pausecfg"
+_pdir.mkdir(exist_ok=True)
+(_pdir / "pauses.jsonl").write_text(json.dumps({
+    "started": f"{_sat}T11:27:19", "ended": f"{_mon}T07:48:55", "reason": "personal"}) + "\n")
+_pcfg = {**CFG, "state_dir": str(_pdir)}
+_, _pe = W.window_bounds(_pcfg, _fri)
+_ts_mon, _ = W.window_bounds(_pcfg, _mon)
+check("a weekend pause is invisible to a Friday-only lookup",
+      W.pause_windows(_pcfg, _fri) == [])
+check("the same pause is found once the range is passed",
+      len(W.pause_windows(_pcfg, _fri, (_pe, _ts_mon))) == 1)
+check("a pause outside the range is still excluded",
+      W.pause_windows(_pcfg, _fri,
+                      (_pe, datetime.combine(_sat, datetime.min.time()))) == [])
+_items = [{"at": f"{_sat}T14:00:00"}, {"at": f"{_fri}T16:00:00"}]
+_kept, _gone = W.drop_paused(W.pause_windows(_pcfg, _fri, (_pe, _ts_mon)), _items, "at")
+check("work inside the weekend pause is dropped, work outside it kept",
+      _gone == 1 and _kept == [{"at": f"{_fri}T16:00:00"}])
+
 # every bounds-aware collector must pass those bounds to the pause lookup
 import inspect as _i2
 for _fn in ("collect_git", "collect_shell", "collect_claude_code",
@@ -676,29 +685,41 @@ for _fn in ("collect_git", "collect_shell", "collect_claude_code",
 
 # --------------------------------------------------------------- timesheet ---
 import calendar as _cal
-_ts = W.timesheet_month(CFG, 2026, 5)
-check("a month grid is 48 slots deep", len(_ts["grid"]) == 48)
-check("May 2026 is 31 days wide", _ts["days"] == 31 and len(_ts["grid"][0]) == 31)
+_raw = W.expand(CFG["state_dir"]) / "raw"
+_months = sorted({(d.year, d.month) for d in (
+    datetime.strptime(p.name, "%Y-%m-%d").date()
+    for p in (_raw.iterdir() if _raw.is_dir() else [])
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name))})
 check("every month's day count matches the calendar",
       all(W.timesheet_month(CFG, 2026, m)["days"] == _cal.monthrange(2026, m)[1]
           for m in (2, 6, 9, 12)))
-check("day totals never exceed the slots in a day",
-      all(0 <= n <= 48 for n in _ts["day_totals"]))
-check("the grand total is the sum of the days",
-      _ts["total_slots"] == sum(_ts["day_totals"]))
-check("slot totals and day totals count the same marks",
-      sum(_ts["slot_totals"]) == _ts["total_slots"])
-check("days worked counts only days with a mark",
-      _ts["days_worked"] == sum(1 for n in _ts["day_totals"] if n))
-check("May 2026 is flagged as reconstructed, not sampled", bool(_ts["reconstructed"]))
-_aug = W.timesheet_month(CFG, 2026, 8)
-check("August was sampled, so nothing is reconstructed", not _aug["reconstructed"])
-check("a sampled month reports plausible hours",
-      0 < _aug["total_slots"] / 2 < 31 * 24, f"{_aug['total_slots'] / 2}h")
+check("a month grid is 48 slots deep and as wide as the month",
+      all(len(_g["grid"]) == 48 and len(_g["grid"][0]) == _g["days"]
+          for _g in [W.timesheet_month(CFG, 2026, m) for m in (2, 5)]))
+if not _months:
+    skip.append("timesheet: no sample days on this machine")
+else:
+    _y, _m = _months[-1]
+    _t = W.timesheet_month(CFG, _y, _m)
+    check("day totals never exceed the slots in a day",
+          all(0 <= n <= 48 for n in _t["day_totals"]))
+    check("the grand total is the sum of the days",
+          _t["total_slots"] == sum(_t["day_totals"]))
+    check("slot totals and day totals count the same marks",
+          sum(_t["slot_totals"]) == _t["total_slots"])
+    check("days worked counts only days with a mark",
+          _t["days_worked"] == sum(1 for n in _t["day_totals"] if n))
+    check("hours stay inside what the month can physically hold",
+          0 <= _t["total_slots"] / 2 <= _t["days"] * 24)
+    # a day is only ever called reconstructed when it genuinely has no samples
+    check("only sample-less days are marked reconstructed",
+          all(not (_raw / f"{D(_y, _m, _d):%Y-%m-%d}" / "activity.jsonl").is_file()
+              for _d in _t["reconstructed"]))
 # the workbook itself: dates and weekday labels must match the real calendar
-_book = W.expand(CFG["output_dir"]) / W.timesheet_cfg(CFG)["path"]
+_tsc = W.timesheet_cfg(CFG)
+_book = W.expand(CFG["output_dir"]) / _tsc["path"]
 if not _book.is_file():
-    skip.append("timesheet: workbook not written yet")
+    skip.append("timesheet: no workbook written on this machine yet")
 else:
     from openpyxl import load_workbook as _lw
     _wb = _lw(_book)
@@ -718,6 +739,20 @@ else:
             _wrong.append(f"{_name} has a column past day {_nd}")
         if not _ws.conditional_formatting._cf_rules:
             _wrong.append(f"{_name} has no conditional formatting")
+        else:
+            _rule = list(_ws.conditional_formatting._cf_rules.values())[0][0]
+            # a differential fill lives in bgColor; fgColor saves as no fill at all
+            if _rule.dxf.fill.bgColor.rgb != _tsc["mark_bg"]:
+                _wrong.append(f"{_name} x-fill is {_rule.dxf.fill.bgColor.rgb}")
+        _palette = ((1, 1, "owner_bg"), (2, 1, "header_bg"), (2, 2, "header_bg"),
+                    (3, 2, "header_bg"), (20, 1, "label_bg"), (20, 2 + _nd, "label_bg"))
+        for _r, _c, _key in _palette:
+            if _ws.cell(_r, _c).fill.fgColor.rgb != _tsc[_key]:
+                _wrong.append(f"{_name} r{_r}c{_c} is {_ws.cell(_r, _c).fill.fgColor.rgb}, "
+                              f"want {_key}")
+        for _r, _c in ((1, 1), (2, 1), (2, 2)):
+            if _ws.cell(_r, _c).font.color.rgb != _tsc["header_fg"]:
+                _wrong.append(f"{_name} r{_r}c{_c} header text is not {_tsc['header_fg']}")
     check("every sheet's dates, weekdays and formatting are right",
           not _wrong, "; ".join(_wrong[:4]))
     check("one workbook, one sheet per month, in calendar order",
