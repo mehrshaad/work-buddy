@@ -225,6 +225,11 @@
     "staging_dir": "~/.worklog/teams",
     "footer_name": "Work Buddy",
     "footer_url": "https://github.com/mehrshaad/work-buddy",
-    "deeplink_max_chars": 4000
+    "deeplink_max_chars": 4000,
+    "auto_send": false,
+    "auto_send_at": "10:00",
+    "exclude_sections": [
+      "side project"
+    ]
   }
 }

@@ -92,8 +92,14 @@ worklog teams send         # post it
 worklog teams send --dry-run
 ```
 
-It is review-first: a weekday morning agent runs `prepare` and nothing more, so a
-degraded summary never reaches a manager unread. Sending is a click in the menu bar.
+Two agents, an hour apart, so there is a grace period. The first stages the summary
+and notifies you; the second sends it. Turn the second off with `teams.auto_send` (or
+the menu bar tick) and sending stays a click. Either way a degraded summary is never
+staged in the first place, `teams skip` drops one day without disabling anything, and a
+**paused** machine never sends — the summary stays staged for when you resume.
+
+`teams.exclude_sections` drops whole sections from the message by heading, matched
+loosely, for the parts of your log a manager has no use for.
 
 Delivery goes through a Power Automate flow you create yourself — no tenant admin
 consent needed. [docs/teams-daily-summary.md](docs/teams-daily-summary.md) is the full

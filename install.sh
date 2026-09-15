@@ -61,11 +61,28 @@ agent com.workbuddy.catchup "$(weekdays_at 10)" repair
 
 # Optional: stage the Teams summary each weekday morning. It only stages — sending stays
 # a menu-bar click — so a degraded summary never reaches anyone unread.
-if python3 -c "import json,sys;sys.exit(0 if json.load(open('$ROOT/config.json')).get('teams',{}).get('enabled') else 1)" 2>/dev/null; then
+teams_setting() {  # key -> value from the teams config block, empty when unset
+  python3 - "$1" <<PY 2>/dev/null
+import json, sys
+print(json.load(open("$ROOT/config.json")).get("teams", {}).get(sys.argv[1], "") or "")
+PY
+}
+
+if [ "$(teams_setting enabled)" = "True" ]; then
   agent com.workbuddy.teams "$(weekdays_at 9)" teams prepare --quiet
+  if [ "$(teams_setting auto_send)" = "True" ]; then
+    # the grace period between the two is the whole point: staged early, sent later
+    send_hour="$(teams_setting auto_send_at)"; send_hour="${send_hour%%:*}"
+    agent com.workbuddy.teams-send "$(weekdays_at "${send_hour:-10}")" teams autosend
+  else
+    launchctl bootout "gui/$(id -u)/com.workbuddy.teams-send" 2>/dev/null || true
+    rm -f "$AGENTS/com.workbuddy.teams-send.plist"
+  fi
 else
-  launchctl bootout "gui/$(id -u)/com.workbuddy.teams" 2>/dev/null || true
-  rm -f "$AGENTS/com.workbuddy.teams.plist"
+  for l in com.workbuddy.teams com.workbuddy.teams-send; do
+    launchctl bootout "gui/$(id -u)/$l" 2>/dev/null || true
+    rm -f "$AGENTS/$l.plist"
+  done
 fi
 
 PLUGINS="$HOME/Library/Application Support/SwiftBar/Plugins"

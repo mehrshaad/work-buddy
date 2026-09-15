@@ -195,8 +195,17 @@ if ts and ts.get("date"):
         print(f"--Ready: {ts['date']} ({ts['lines']} lines) | color=#e67e22 {FONT}")
         print(f"--No flow URL or recipient configured yet | color=#c0392b {FONT}")
     else:
-        print(f"--Ready: {ts['date']} ({ts['lines']} lines) | color=#e67e22 {FONT}")
+        when = "" if not ts.get("auto_send") else f", sends at {ts.get('auto_send_at')}"
+        if ts.get("skipped"):
+            print(f"--Skipped: {ts['date']} ({ts['lines']} lines) | color=#7f8c8d {FONT}")
+        else:
+            print(f"--Ready: {ts['date']} ({ts['lines']} lines){when} | color=#e67e22 {FONT}")
         act("--Send it now", "teams", "send")
+        if not ts.get("skipped"):
+            act("--Skip this one", "teams", "skip")
+    act(f"--{'☑' if ts.get('auto_send') else '☐'}  Send automatically at "
+        f"{ts.get('auto_send_at', '10:00')}",
+        "config", "set", "teams.auto_send", "false" if ts.get("auto_send") else "true")
 
 # ---------------------------------------------------------------- shortcuts ----
 print("---")

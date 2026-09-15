@@ -159,8 +159,21 @@ def active_pause(cfg: dict, now: datetime | None = None) -> dict | None:
     return p
 
 
-def pause_windows(cfg: dict, day: date_cls) -> list[tuple[datetime, datetime]]:
-    """Every paused interval touching `day`, including one still running."""
+def pause_windows(cfg: dict, day: date_cls,
+                  bounds: tuple | None = None) -> list[tuple[datetime, datetime]]:
+    """Paused intervals touching `day` — or overlapping `bounds` when one is given.
+
+    The addendum collects across a range that can span a whole weekend while filing
+    the result under the Friday. A pause taken on the Saturday touches no part of
+    that Friday, so a day-only lookup misses it and the paused work lands in the log.
+    Whenever a collector was given bounds, the bounds are what the pause must be
+    compared against.
+    """
+    def touches(s: datetime, e: datetime) -> bool:
+        if bounds:
+            return s <= bounds[1] and bounds[0] <= e
+        return s.date() <= day <= e.date()
+
     _, hist = pause_paths(cfg)
     out = []
     if hist.is_file():
@@ -173,7 +186,7 @@ def pause_windows(cfg: dict, day: date_cls) -> list[tuple[datetime, datetime]]:
                 e = datetime.fromisoformat(w["ended"])
             except (json.JSONDecodeError, KeyError, ValueError):
                 continue
-            if s.date() <= day <= e.date():
+            if touches(s, e):
                 out.append((s, e))
     cur = active_pause(cfg)
     if cur:
@@ -181,7 +194,7 @@ def pause_windows(cfg: dict, day: date_cls) -> list[tuple[datetime, datetime]]:
             s = datetime.fromisoformat(cur["started"])
             e = (datetime.fromisoformat(cur["until"]) if cur.get("until")
                  else datetime.now())
-            if s.date() <= day <= e.date():
+            if touches(s, e):
                 out.append((s, e))
         except (KeyError, ValueError):
             pass
@@ -1060,7 +1073,7 @@ def collect_git(cfg: dict, day: date_cls, bounds=None) -> dict:
         return {"available": False, "reason": "no git repos found under scan_roots"}
 
     redact = Redactor(cfg)
-    _pw = pause_windows(cfg, day)
+    _pw = pause_windows(cfg, day, bounds)
     results = []
     for repo in repos:
         # repos may set a local user.email different from the global one;
@@ -1183,7 +1196,7 @@ def collect_shell(cfg: dict, day: date_cls, bounds=None) -> dict:
         cmds.append({"at": datetime.fromtimestamp(ts).isoformat(timespec="seconds"),
                      "cmd": redact(cmd)[:400]})
 
-    cmds, _g = drop_paused(pause_windows(cfg, day), cmds, "at")
+    cmds, _g = drop_paused(pause_windows(cfg, day, bounds), cmds, "at")
     cmds = cmds[: scfg["max_commands"]]
     return {"available": True, "files": files_read, "count": len(cmds), "commands": cmds}
 
@@ -1866,7 +1879,7 @@ def collect_claude_code(cfg: dict, day: date_cls, bounds=None) -> dict:
         })
 
     sessions.sort(key=lambda s: s["start"])
-    sessions, _gone = drop_paused(pause_windows(cfg, day), sessions, "start", "end")
+    sessions, _gone = drop_paused(pause_windows(cfg, day, bounds), sessions, "start", "end")
     if _gone:
         log_line(cfg, f"pause: hid {_gone} Claude Code session(s) on {day}")
     sessions, forks = _dedupe_forked_sessions(cfg, sessions)
@@ -2012,7 +2025,7 @@ def collect_tokenwise(cfg: dict, day: date_cls, bounds=None, ingest: bool = True
     except sqlite3.Error as exc:
         return {"available": False, "reason": f"ledger unreadable ({exc})"}
 
-    turns, gone = drop_paused(pause_windows(cfg, day), turns, "ts")
+    turns, gone = drop_paused(pause_windows(cfg, day, bounds), turns, "ts")
     if gone:
         log_line(cfg, f"pause: hid {gone} Claude Code turn(s) of token usage on {day}")
     main = [t for t in turns if not t["is_subagent"]]
@@ -2176,7 +2189,7 @@ def collect_cloud(cfg: dict, day: date_cls, bounds=None) -> dict:
             })
 
     hits.sort(key=lambda h: h["modified"])
-    hits, _g = drop_paused(pause_windows(cfg, day), hits, "modified")
+    hits, _g = drop_paused(pause_windows(cfg, day, bounds), hits, "modified")
     truncated = len(hits) > ccfg["max_files"]
     return {"available": True, "roots": [str(r) for r in roots],
             "count": len(hits), "truncated": truncated,
@@ -3836,7 +3849,14 @@ TEAMS_DEFAULTS = {"enabled": False,
                   "staging_dir": "~/.worklog/teams",
                   "footer_name": "Work Buddy",
                   "footer_url": "https://github.com/mehrshaad/work-buddy",
-                  "deeplink_max_chars": 4000}
+                  "deeplink_max_chars": 4000,
+                  # staging happens early; the send waits, so there is a window in which
+                  # to read the summary, skip it, or fix the day it came from
+                  "auto_send": False,
+                  "auto_send_at": "10:00",
+                  # headings a manager has no use for; matched case-insensitively as
+                  # substrings, because the summarizer writes these headings itself
+                  "exclude_sections": ["side project"]}
 
 
 def teams_cfg(cfg: dict) -> dict:
@@ -3852,6 +3872,28 @@ def teams_staged(cfg: dict, day: date_cls) -> Path:
 def teams_read(path: str) -> str:
     p = expand(path)
     return p.read_text(encoding="utf-8").strip() if p.is_file() else ""
+
+
+def teams_drop_sections(cfg: dict, text: str) -> str:
+    """Remove whole sections whose heading matches an excluded pattern.
+
+    The summarizer invents its own headings, so this matches loosely rather than
+    demanding an exact string, and a section runs until the next heading.
+    """
+    pats = [re.compile(p, re.I) for p in teams_cfg(cfg)["exclude_sections"] if p]
+    if not pats:
+        return text
+    out, dropping = [], False
+    for line in text.splitlines():
+        stripped = line.strip()
+        heading = stripped.startswith("**") and stripped.endswith("**")
+        if heading:
+            dropping = any(p.search(stripped.strip("*")) for p in pats)
+        if not dropping:
+            out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out)
 
 
 def teams_bullets(cfg: dict, day: date_cls):
@@ -3871,6 +3913,7 @@ def teams_bullets(cfg: dict, day: date_cls):
     body = re.sub(r"^_Reconstructed[^\n]*_\n?", "", body, flags=re.M).strip()
     if "Generated without summarization" in body:
         return None, f"{md.name} is the unsummarized fallback"
+    body = teams_drop_sections(cfg, body)
     if len(body.splitlines()) < 3:
         return None, f"{md.name} has no substance to report"
     return body, None
@@ -4029,8 +4072,52 @@ def teams_state(cfg: dict, day: date_cls) -> dict:
             "sent_at": (rec or {}).get("opened_at"),
             "route": (rec or {}).get("route"),
             "lines": len((rec or {}).get("text", "").splitlines()),
+            "skipped": bool(rec and rec.get("skipped")),
+            "auto_send": bool(t["auto_send"]),
+            "auto_send_at": t["auto_send_at"],
             "configured": bool(teams_read(t["flow_url_file"])
                                or teams_read(t["recipient_file"]))}
+
+
+def teams_skip(cfg: dict, day: date_cls) -> int:
+    """Mark a staged day so the automatic send leaves it alone."""
+    p = teams_staged(cfg, day)
+    if not p.is_file():
+        print(f"nothing staged for {day}")
+        return 1
+    rec = json.loads(p.read_text())
+    rec["skipped"] = True
+    p.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+    log_line(cfg, f"teams: {day} skipped by hand - the automatic send will pass over it")
+    print(f"{day} will not be sent automatically")
+    return 0
+
+
+def teams_autosend(cfg: dict, day: date_cls) -> int:
+    """The scheduled send. Silent about every reason it declines except a real failure."""
+    t = teams_cfg(cfg)
+    if not t["auto_send"]:
+        return 0
+    # Pausing is the user saying "not now, and not on my behalf". Honour it here too:
+    # a paused machine must not post to a manager. The summary stays staged, so the
+    # menu bar can still send it once tracking resumes.
+    if active_pause(cfg):
+        log_line(cfg, f"teams: paused, so {day} was not sent automatically")
+        notify(cfg, "Daily summary held back",
+               f"{day.strftime('%a %-d %b')} is still staged - Work Buddy is paused.",
+               subtitle="send it from the menu bar when you are ready")
+        return 0
+    p = teams_staged(cfg, day)
+    if not p.is_file():
+        log_line(cfg, f"teams: nothing staged for {day}, so nothing was sent")
+        return 0
+    rec = json.loads(p.read_text())
+    if rec.get("sent") or rec.get("opened"):
+        return 0
+    if rec.get("skipped"):
+        log_line(cfg, f"teams: {day} was skipped by hand, so nothing was sent")
+        return 0
+    return teams_send(cfg, day)
 
 
 def cmd_teams(cfg: dict, args) -> int:
@@ -4049,6 +4136,10 @@ def cmd_teams(cfg: dict, args) -> int:
         return teams_prepare(cfg, day, args.quiet)
     if args.action == "send":
         return teams_send(cfg, day, args.dry_run)
+    if args.action == "autosend":
+        return teams_autosend(cfg, day)
+    if args.action == "skip":
+        return teams_skip(cfg, day)
     if args.action == "show":
         p = teams_staged(cfg, day)
         print(json.loads(p.read_text())["text"] if p.is_file() else "")
@@ -4117,7 +4208,7 @@ def main() -> int:
     q.add_argument("--date", default="today")
     q = sub.add_parser("teams", help="stage and send the day's summary to a Teams chat")
     q.add_argument("action", nargs="?", default="state",
-                   choices=["prepare", "send", "show", "state"])
+                   choices=["prepare", "send", "autosend", "skip", "show", "state"])
     q.add_argument("--date", default=None,
                    help="YYYY-MM-DD | today | yesterday "
                         "(default: the previous work day, so Monday reports Friday)")

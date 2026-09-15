@@ -616,6 +616,62 @@ check("the teams command defaults to the previous work day, not to yesterday",
       "prev_workday(cfg, date_cls.today())" in __import__("inspect").getsource(W.cmd_teams))
 
 
+# ------------------------------------------------- teams: sending behaviour --
+_tcfg = {**CFG, "teams": {**W.teams_cfg(CFG), "exclude_sections": ["side project"]}}
+_sample = ("**Work update \u2014 1 Jan 2026**\n\n**Real work**\n- Shipped it.\n\n"
+           "**Side projects**\n- Weekend hacking.\n\n**Meetings**\n- A sync.")
+_kept = W.teams_drop_sections(_tcfg, _sample)
+check("an excluded section is dropped from the summary", "Side projects" not in _kept)
+check("its bullets go with it", "Weekend hacking" not in _kept)
+check("the sections around it survive",
+      "Shipped it." in _kept and "A sync." in _kept and "Meetings" in _kept)
+check("the title line is never treated as a section to drop",
+      _kept.startswith("**Work update"))
+check("an empty exclusion list changes nothing",
+      W.teams_drop_sections({**CFG, "teams": {**W.teams_cfg(CFG), "exclude_sections": []}},
+                            _sample) == _sample)
+check("matching is case-insensitive and partial",
+      "SIDE PROJECT WORK" not in W.teams_drop_sections(
+          _tcfg, "**SIDE PROJECT WORK**\n- x\n\n**Kept**\n- y"))
+# the scheduled send must decline rather than post on a paused machine
+_asrc = __import__("inspect").getsource(W.teams_autosend)
+check("the automatic send honours a pause", "active_pause(cfg)" in _asrc)
+check("the automatic send never posts a day twice",
+      'rec.get("sent")' in _asrc and 'rec.get("opened")' in _asrc)
+check("the automatic send respects a hand-skipped day", 'rec.get("skipped")' in _asrc)
+check("the automatic send is opt-in", 'if not t["auto_send"]' in _asrc)
+
+
+# --------------------------------------------- pause: ranges, not single days --
+# The addendum files Friday-evening-to-Monday-morning work under the Friday. A pause
+# taken on the Saturday touches no part of that Friday, so a day-only lookup used to
+# miss it and weekend work landed in the manager's report.
+_ph = W.pause_paths(CFG)[1]
+_hist = _ph.read_text(errors="replace") if _ph.is_file() else ""
+if "2026-09-12T11:27" not in _hist:
+    skip.append("pause: the weekend pause window is no longer in the history")
+else:
+    _fri, _mon = D(2026, 9, 11), D(2026, 9, 14)
+    _, _pe = W.window_bounds(CFG, _fri)
+    _ts, _ = W.window_bounds(CFG, _mon)
+    _day_only = W.pause_windows(CFG, _fri)
+    _ranged = W.pause_windows(CFG, _fri, (_pe, _ts))
+    check("a weekend pause is invisible to a Friday-only lookup",
+          not any(w[0].date() == D(2026, 9, 12) for w in _day_only))
+    check("the same pause is found when the range is passed",
+          any(w[0].date() == D(2026, 9, 12) for w in _ranged))
+    check("the addendum no longer reports a weekend spent paused",
+          "24 CC sessions" not in W.addendum_headline(
+              W.build_addendum(CFG, _fri, _mon)))
+# every bounds-aware collector must pass those bounds to the pause lookup
+import inspect as _i2
+for _fn in ("collect_git", "collect_shell", "collect_claude_code",
+            "collect_tokenwise", "collect_cloud"):
+    _src = _i2.getsource(getattr(W, _fn))
+    check(f"{_fn} scopes the pause lookup to its bounds",
+          "pause_windows(cfg, day, bounds)" in _src)
+
+
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
 for s in skip:
     print(f"  SKIP  {s}")
