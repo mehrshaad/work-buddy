@@ -746,6 +746,7 @@ if not _book.is_file():
     skip.append("timesheet: no workbook written on this machine yet")
 else:
     from openpyxl import load_workbook as _lw
+    from openpyxl.utils import get_column_letter
     _wb = _lw(_book)
     _wrong = []
     for _name in _wb.sheetnames:
@@ -765,18 +766,35 @@ else:
             _wrong.append(f"{_name} has no conditional formatting")
         else:
             _rule = list(_ws.conditional_formatting._cf_rules.values())[0][0]
-            # a differential fill lives in bgColor; fgColor saves as no fill at all
-            if _rule.dxf.fill.bgColor.rgb != _tsc["mark_bg"]:
-                _wrong.append(f"{_name} x-fill is {_rule.dxf.fill.bgColor.rgb}")
-        _palette = ((1, 1, "owner_bg"), (2, 1, "header_bg"), (2, 2, "header_bg"),
-                    (3, 2, "header_bg"), (20, 1, "label_bg"), (20, 2 + _nd, "label_bg"))
+            _bg = _rule.dxf.fill.bgColor
+            # the tracker colours an x by theme, so a pasted block follows its palette
+            if _rule.type != "expression" or _bg.theme != _tsc["mark_theme"]:
+                _wrong.append(f"{_name} x-rule is {_rule.type}/{_bg.theme}")
+        _palette = ((2, 1, "header_bg"), (2, 2 + _nd, "header_bg"),
+                    (4, 1, "label_bg"), (4, 2 + _nd, "label_bg"),
+                    (4 + 48, 1, "label_bg"))
         for _r, _c, _key in _palette:
             if _ws.cell(_r, _c).fill.fgColor.rgb != _tsc[_key]:
                 _wrong.append(f"{_name} r{_r}c{_c} is {_ws.cell(_r, _c).fill.fgColor.rgb}, "
                               f"want {_key}")
-        for _r, _c in ((1, 1), (2, 1), (2, 2)):
-            if _ws.cell(_r, _c).font.color.rgb != _tsc["header_fg"]:
-                _wrong.append(f"{_name} r{_r}c{_c} header text is not {_tsc['header_fg']}")
+        # weekend columns are muted in the header and shaded in the grid
+        for _i in range(_nd):
+            _wknd = D(_d0.year, _d0.month, _i + 1).isoweekday() not in CFG["work_days"]
+            _want = _tsc["header_weekend_bg"] if _wknd else _tsc["header_bg"]
+            if _ws.cell(2, 2 + _i).fill.fgColor.rgb != _want:
+                _wrong.append(f"{_name} header col {_i + 1} weekend shading")
+                break
+        if _ws.cell(1, 1).font.sz != 13 or _ws.cell(1, 1).font.name != _tsc["font"]:
+            _wrong.append(f"{_name} name band font")
+        if _ws.cell(2, 2).font.color.rgb != _tsc["header_fg"]:
+            _wrong.append(f"{_name} header text colour")
+        # totals must be live formulas, so a hand edit in the shared book recalculates
+        if not str(_ws.cell(4, 2 + _nd).value or "").startswith("=COUNTA("):
+            _wrong.append(f"{_name} row total is not a formula")
+        if not str(_ws.cell(52, 2 + _nd).value or "").startswith("=SUM("):
+            _wrong.append(f"{_name} slots total is not a formula")
+        if f"A1:{get_column_letter(2 + _nd)}1" not in [str(m) for m in _ws.merged_cells.ranges]:
+            _wrong.append(f"{_name} name band is not merged across the block")
     check("every sheet's dates, weekdays and formatting are right",
           not _wrong, "; ".join(_wrong[:4]))
     check("one workbook, one sheet per month, in calendar order",

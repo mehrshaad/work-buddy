@@ -4170,13 +4170,22 @@ TIMESHEET_DEFAULTS = {"enabled": True,
                       # write times; Spotlight keeps them long after the power log
                       "probe_filesystem": True,
                       "max_files_probed": 20000,
-                      # sampled from the reference sheet this was modelled on
-                      "owner_bg": "FF2B7B90",      # teal band behind the name
-                      "header_bg": "FF2A4A8B",     # navy date/weekday header
+                      # Lifted from the team tracker this has to paste into, so a
+                      # block drops in without restyling. The two theme colours are
+                      # kept as theme references rather than resolved to RGB, so they
+                      # follow the destination workbook's palette the way its own
+                      # blocks do.
+                      "font": "Arial",
+                      "name_theme": 8, "name_tint": -0.249977111117893,
+                      "header_bg": "FF305496",
+                      "header_weekend_bg": "FF8497B0",
                       "header_fg": "FFFFFFFF",
-                      "label_bg": "FFD4DDF0",      # time labels and the totals column
-                      "mark_bg": "FFAED9E4",       # cyan behind an x
-                      "mark_fg": "FF1F3864"}
+                      "label_bg": "FFD9E1F2",
+                      "weekend_bg": "FFF2F2F2",
+                      "grid_fg": "FF808080",
+                      "mark_theme": 8, "mark_tint": 0.5999938962981048}
+
+
 SLOTS_PER_DAY = 48
 
 
@@ -4349,10 +4358,16 @@ def timesheet_month(cfg: dict, year: int, month: int) -> dict:
 
 
 def write_timesheet(cfg: dict, year: int, month: int) -> Path:
-    """Write or replace one month's sheet inside the single shared workbook."""
+    """Write or replace one month's sheet, laid out like the team tracker's own blocks.
+
+    Geometry, formulas, fills and the conditional rule are all copied from that file so
+    a block can be selected and pasted into the shared workbook without restyling. The
+    totals are live formulas rather than numbers, so a hand edit recalculates.
+    """
     from openpyxl import Workbook, load_workbook
-    from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.formatting.rule import FormulaRule
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.styles.colors import Color
     from openpyxl.utils import get_column_letter
 
     t = timesheet_cfg(cfg)
@@ -4371,114 +4386,127 @@ def write_timesheet(cfg: dict, year: int, month: int) -> Path:
     # sheets read most naturally in calendar order rather than the order they were built
     wb._sheets.sort(key=lambda sh: datetime.strptime(sh.title, "%b %Y"))
 
-    owner_fill = PatternFill("solid", fgColor=t["owner_bg"])
-    header_fill = PatternFill("solid", fgColor=t["header_bg"])
+    last_col = 2 + ndays                     # A labels, B..(B+ndays-1) days, then totals
+    total_col = get_column_letter(last_col)
+    last_day_col = get_column_letter(1 + ndays)
+    R_FIRST, R_LAST = 4, 3 + SLOTS_PER_DAY   # the 48 slot rows
+    R_SLOTS, R_HOURS, R_SUM = R_LAST + 1, R_LAST + 2, R_LAST + 3
+
+    name_fill = PatternFill("solid",
+                            fgColor=Color(theme=t["name_theme"], tint=t["name_tint"]))
+    head_fill = PatternFill("solid", fgColor=t["header_bg"])
+    head_wknd = PatternFill("solid", fgColor=t["header_weekend_bg"])
     label_fill = PatternFill("solid", fgColor=t["label_bg"])
-    mark_fill = PatternFill("solid", fgColor=t["mark_bg"])
-    white_bold = Font(bold=True, color=t["header_fg"])
-    bold = Font(bold=True)
+    wknd_fill = PatternFill("solid", fgColor=t["weekend_bg"])
+    F = t["font"]
+    head_font = Font(name=F, sz=10, bold=True, color=t["header_fg"])
+    label_font = Font(name=F, sz=9, bold=True)
+    tot_font = Font(name=F, sz=10, bold=True)
+    big_font = Font(name=F, sz=11, bold=True)
+    cell_font = Font(name=F, sz=10, color=t["grid_fg"])
     centre = Alignment(horizontal="center", vertical="center")
-    thin = Side(style="thin", color="FFD0D7DE")
+    left = Alignment(horizontal="left", vertical="center")
+    thin = Side(style="thin")
     box = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    last_col = 2 + ndays                              # A labels, B..(B+ndays-1), total
-    total_col = get_column_letter(last_col)
+    def style(c, fill=None, font=None, align=centre, nf=None):
+        if fill is not None:
+            c.fill = fill
+        c.font = font or cell_font
+        c.alignment = align
+        c.border = box
+        if nf:
+            c.number_format = nf
+        return c
 
-    owner_cell = ws.cell(1, 1, t["owner"])
-    owner_cell.font = white_bold
+    # ---- the name band, one merged row across the block
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+    n = ws.cell(1, 1, t["owner"])
+    n.fill = name_fill
+    n.font = Font(name=F, sz=13, bold=True, color=Color(theme=0))
+    n.alignment = left
+    ws.row_dimensions[1].height = 16.5
     for col in range(1, last_col + 1):
-        ws.cell(1, col).fill = owner_fill
-    if data["reconstructed"]:
-        note = ws.cell(1, 3, f"{len(data['reconstructed'])} of {ndays} days rebuilt from "
-                             "commits, sessions and meetings - a floor on the hours, "
-                             "not a measurement (the sampler was not running)")
-        note.font = Font(italic=True, color="FF8A6D3B")
-    ws.cell(2, 1, "Date \u2192").font = white_bold
-    ws.cell(3, 1, "Time \u2193").font = white_bold
-    ws.cell(2, last_col, "Slots").font = white_bold
-    ws.cell(3, last_col, "Worked").font = white_bold
-    for r in (2, 3):
-        for col in (1, last_col):
-            ws.cell(r, col).fill = header_fill
-            ws.cell(r, col).alignment = centre
-            ws.cell(r, col).border = box
+        ws.cell(1, col).fill = name_fill
 
+    # ---- date and weekday headers, weekend columns in the muted tone
+    style(ws.cell(2, 1, "Date \u2192"), head_fill, head_font)
+    style(ws.cell(3, 1, "Time \u2193"), head_fill, head_font)
+    style(ws.cell(2, last_col, "Slots"), head_fill, head_font)
+    style(ws.cell(3, last_col, "Worked"), head_fill, head_font)
+    weekend = []
     for d in range(ndays):
-        col = 2 + d
         day = date_cls(year, month, d + 1)
-        for c in (ws.cell(2, col, d + 1), ws.cell(3, col, day.strftime("%a"))):
-            c.font = white_bold
-            c.fill = header_fill
-            c.alignment = centre
-            c.border = box
+        off = day.isoweekday() not in cfg["work_days"]
+        if off:
+            weekend.append(2 + d)
+        style(ws.cell(2, 2 + d, d + 1), head_wknd if off else head_fill, head_font)
+        style(ws.cell(3, 2 + d, day.strftime("%a")), head_wknd if off else head_fill,
+              head_font)
 
+    # ---- the grid: an x per worked slot, a live count down the totals column
     for slot in range(SLOTS_PER_DAY):
-        row = 4 + slot
-        lab = ws.cell(row, 1, f"{slot // 2:02d}:{'30' if slot % 2 else '00'}")
-        lab.font = bold
-        lab.fill = label_fill
-        lab.alignment = centre
-        lab.border = box
+        row = R_FIRST + slot
+        style(ws.cell(row, 1, f"{slot // 2:02d}:{'30' if slot % 2 else '00'}"),
+              label_fill, label_font)
         for d in range(ndays):
             c = ws.cell(row, 2 + d, "x" if data["grid"][slot][d] else None)
-            c.alignment = centre
-            c.border = box
-        tot = ws.cell(row, last_col, data["slot_totals"][slot])
-        tot.alignment = centre
-        tot.font = bold
-        tot.fill = label_fill
-        tot.border = box
+            style(c, wknd_fill if (2 + d) in weekend else None)
+        style(ws.cell(row, last_col, f"=COUNTA(B{row}:{last_day_col}{row})"),
+              label_fill, tot_font)
 
-    r_slots, r_hours, r_summary = 4 + SLOTS_PER_DAY, 5 + SLOTS_PER_DAY, 7 + SLOTS_PER_DAY
-    for r, label in ((r_slots, "Slots Worked"), (r_hours, "Hours Worked")):
-        c = ws.cell(r, 1, label)
-        c.font = bold
-        c.fill = label_fill
-        c.border = box
+    # ---- per-day totals, then the same figures as hours
+    style(ws.cell(R_SLOTS, 1, "Slots Worked"), label_fill, tot_font)
+    style(ws.cell(R_HOURS, 1, "Hours Worked"), label_fill, tot_font)
     for d in range(ndays):
-        a = ws.cell(r_slots, 2 + d, data["day_totals"][d])
-        b = ws.cell(r_hours, 2 + d, round(data["day_totals"][d] / 2, 1))
-        for c in (a, b):
-            c.alignment = centre
-            c.border = box
-    ws.cell(r_slots, last_col, data["total_slots"]).font = bold
-    hours = round(data["total_slots"] / 2, 1)
-    ws.cell(r_hours, last_col, hours).font = bold
-    for r in (r_slots, r_hours):
-        ws.cell(r, last_col).fill = label_fill
-        ws.cell(r, last_col).alignment = centre
-        ws.cell(r, last_col).border = box
+        col = get_column_letter(2 + d)
+        style(ws.cell(R_SLOTS, 2 + d, f"=COUNTA({col}{R_FIRST}:{col}{R_LAST})"),
+              label_fill, tot_font)
+        style(ws.cell(R_HOURS, 2 + d, f"={col}{R_SLOTS}/2"), label_fill, tot_font, nf="0.0")
+    style(ws.cell(R_SLOTS, last_col, f"=SUM(B{R_SLOTS}:{last_day_col}{R_SLOTS})"),
+          label_fill, big_font)
+    style(ws.cell(R_HOURS, last_col, f"={total_col}{R_SLOTS}/2"), label_fill, big_font,
+          nf="0.0")
 
-    worked = data["days_worked"]
-    pairs = [("Total Hours", hours),
-             ("Days Worked", worked),
-             ("Avg Hrs/Day", round(hours / worked, 1) if worked else 0.0),
-             ("% of Month", round(100 * hours / (ndays * 24), 1) / 100)]
-    for i, (label, value) in enumerate(pairs):
-        lc = ws.cell(r_summary, 1 + i * 4, label)
-        vc = ws.cell(r_summary, 3 + i * 4, value)
-        lc.font = bold
-        lc.fill = label_fill
-        lc.border = box
-        vc.font = bold
-        vc.alignment = centre
-        vc.border = box
-        if label == "% of Month":
-            vc.number_format = "0.0%"
+    # ---- the summary strip, label and value merged in pairs as the tracker has them
+    span = f"B{R_SLOTS}:{last_day_col}{R_SLOTS}"
+    for i, (label, formula, nf) in enumerate((
+            ("Total Hours", f"=SUM({span})/2", "0.0"),
+            ("Days Worked", f'=COUNTIF({span},">0")', None),
+            ("Avg Hrs/Day", f'=IFERROR(SUM({span})/2/COUNTIF({span},">0"),0)', "0.0"),
+            ("% of Month", f"=IFERROR(SUM({span})/{ndays * SLOTS_PER_DAY},0)", "0.0%"))):
+        lc, vc = 1 + i * 6, 4 + i * 6
+        if vc + 1 > last_col:                # a short month cannot hold four pairs
+            break
+        ws.merge_cells(start_row=R_SUM, start_column=lc, end_row=R_SUM, end_column=lc + 2)
+        ws.merge_cells(start_row=R_SUM, start_column=vc, end_row=R_SUM, end_column=vc + 1)
+        style(ws.cell(R_SUM, lc, label), label_fill, tot_font, align=left)
+        style(ws.cell(R_SUM, vc, formula), label_fill, tot_font, nf=nf)
+        for c in range(lc, vc + 2):
+            ws.cell(R_SUM, c).border = box
 
-    grid_ref = f"B4:{get_column_letter(1 + ndays)}{3 + SLOTS_PER_DAY}"
-    # a differential fill is keyed on bgColor, not fgColor: pass fgColor here and the
-    # rule saves with no fill at all, so every x renders unshaded
-    ws.conditional_formatting.add(grid_ref, CellIsRule(
-        operator="equal", formula=['"x"'],
-        fill=PatternFill(bgColor=t["mark_bg"]),
-        font=Font(bold=True, color=t["mark_fg"])))
+    # Any non-empty cell colours itself, which is how the tracker works when a person
+    # types their own x. Matching it means a pasted block behaves like a typed one.
+    ws.conditional_formatting.add(
+        f"B{R_FIRST}:{last_day_col}{R_LAST}",
+        FormulaRule(formula=[f"LEN(TRIM(B{R_FIRST}))>0"],
+                    fill=PatternFill("solid", fgColor=Color(rgb="00000000"),
+                                     bgColor=Color(theme=t["mark_theme"],
+                                                   tint=t["mark_tint"]))))
 
-    ws.freeze_panes = "B4"
-    ws.column_dimensions["A"].width = 13
+    if data["reconstructed"]:
+        # kept clear of the block so selecting A1:<last><summary> never drags it along
+        note = ws.cell(R_SUM + 2, 1,
+                       f"{len(data['reconstructed'])} of {ndays} days rebuilt from file "
+                       "write times, commits, sessions and meetings - a floor on the "
+                       "hours, not a measurement (the sampler was not running)")
+        note.font = Font(name=F, sz=9, italic=True, color="FF8A6D3B")
+
+    ws.column_dimensions["A"].width = 12
     for d in range(ndays):
-        ws.column_dimensions[get_column_letter(2 + d)].width = 4.2
-    ws.column_dimensions[total_col].width = 8
+        ws.column_dimensions[get_column_letter(2 + d)].width = 5
+    ws.column_dimensions[total_col].width = 10
+    ws.freeze_panes = f"B{R_FIRST}"
     wb.save(out)
     return out
 
