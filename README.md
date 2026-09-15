@@ -81,6 +81,29 @@ worklog repair --dry-run     # what is degraded and why
 worklog repair               # fix it
 ```
 
+## Monthly timesheet
+
+One workbook, one sheet per month, written when the month ends:
+
+```
+worklog timesheet                  # the month that just finished
+worklog timesheet --month 2026-08
+worklog timesheet --all            # every month with data
+```
+
+48 half-hour rows by the month's real days, an **x** where the machine saw work, with
+per-slot and per-day totals, hours, days worked, average and percentage of the month.
+A slot is marked on any credited activity in it; excluded apps and paused stretches
+leave no mark, and an open meeting window counts as presence.
+
+Set `activity.sample_all_hours` to sample around the clock so evenings and weekends
+reach the sheet. The daily report is unaffected — it clamps itself to your work hours,
+which is what the after-hours addendum exists to complement.
+
+Days that predate the sampler are rebuilt from their stored evidence — commits,
+sessions and meetings — which is a **floor** on the hours rather than a measurement.
+Any sheet containing such days says so at the top.
+
 ## Daily summary to a Teams chat
 
 Optional, off by default. Work Buddy can put the day's **Work update** section into a
@@ -153,6 +176,7 @@ so system apps do not clutter the log.
 | --- | --- |
 | `worklog report` | write today's log now |
 | `worklog weekly` | merge the week's rows into one table |
+| `worklog timesheet` | write the month's hours grid to the workbook |
 | `worklog status` | current state as JSON (what the menu bar renders) |
 | `worklog apps` | apps seen recently and whether each is recorded |
 | `worklog config set work_hours.end 18:00` | change a setting |

@@ -99,7 +99,8 @@
       "MSTeams",
       "Microsoft Teams",
       "Webex"
-    ]
+    ],
+    "sample_all_hours": false
   },
   "unjoined_meetings": {
     "enabled": true,
@@ -231,5 +232,11 @@
     "exclude_sections": [
       "side project"
     ]
+  },
+  "timesheet": {
+    "enabled": true,
+    "path": "Work Hours.xlsx",
+    "owner": "",
+    "min_active_minutes": 0.01
   }
 }

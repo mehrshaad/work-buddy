@@ -18,6 +18,7 @@ Config: ~/.worklog/config.json
 from __future__ import annotations
 
 import argparse
+import calendar
 import fcntl
 import json
 import os
@@ -654,7 +655,10 @@ def scheduled_meeting_now(cfg: dict) -> str | None:
 
 def cmd_sample(cfg: dict, args) -> int:
     now = datetime.now()
-    if not args.force and not is_work_time(cfg, now):
+    # Sampling all day is what lets the timesheet show evening and weekend work. The
+    # daily report is unaffected: collect_activity clamps itself to the work window.
+    if (not args.force and not cfg["activity"].get("sample_all_hours")
+            and not is_work_time(cfg, now)):
         return 0
     if not cfg["activity"]["enabled"]:
         return 0
@@ -758,6 +762,11 @@ def collect_activity(cfg: dict, day: date_cls) -> dict:
                 samples.append(rec)
             except (json.JSONDecodeError, KeyError, ValueError):
                 continue
+    if cfg["activity"].get("sample_all_hours"):
+        # the file now runs around the clock; the report still covers the workday only,
+        # and the addendum is what accounts for the hours on either side of it
+        lo, hi = window_bounds(cfg, day)
+        samples = [r for r in samples if lo <= r["_dt"] <= hi]
     if not samples:
         return {"available": False, "reason": "sample file empty or unreadable"}
 
@@ -4148,6 +4157,305 @@ def cmd_teams(cfg: dict, args) -> int:
     return 0
 
 
+# --------------------------------------------------------------- timesheet ----
+# A month per sheet in one workbook: 48 half-hour rows by up to 31 day columns, an x
+# where the machine saw work. Built from the raw samples rather than the daily logs,
+# so it reflects presence rather than what the summarizer chose to write down.
+TIMESHEET_DEFAULTS = {"enabled": True,
+                      "path": "Work Hours.xlsx",
+                      "owner": "",
+                      # "any activity at all" — a single credited minute fills the slot
+                      "min_active_minutes": 0.01,
+                      "cyan": "FF00B0C7",
+                      "cyan_light": "FFD7F1F6",
+                      "weekend": "FFF2F2F2"}
+SLOTS_PER_DAY = 48
+
+
+def timesheet_cfg(cfg: dict) -> dict:
+    t = {**TIMESHEET_DEFAULTS, **(cfg.get("timesheet") or {})}
+    if not t["owner"]:
+        t["owner"] = (cfg.get("tracker") or {}).get("default_owner") or "Work log"
+    return t
+
+
+def timesheet_day_slots(cfg: dict, day: date_cls) -> list[float]:
+    """Active minutes per half-hour slot for one day, using the sampler's own rules."""
+    out = [0.0] * SLOTS_PER_DAY
+    path = expand(cfg["state_dir"]) / "raw" / day.strftime("%Y-%m-%d") / "activity.jsonl"
+    if not path.is_file():
+        return out
+    acfg = cfg["activity"]
+    cap = float(acfg.get("sample_gap_cap_minutes", 2))
+    samples = []
+    for line in path.read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+            rec["_dt"] = datetime.fromisoformat(rec["ts"])
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+        samples.append(rec)
+    samples.sort(key=lambda r: r["_dt"])
+    for i, rec in enumerate(samples):
+        gap = ((samples[i + 1]["_dt"] - rec["_dt"]).total_seconds() / 60.0
+               if i + 1 < len(samples) else 1.0)
+        gap = min(max(gap, 0.0), cap)
+        app = rec.get("app") or ""
+        if app == EXCLUDED_APP or is_excluded_app(acfg, app, rec.get("bundle")):
+            continue                      # excluded apps are not time spent working
+        # A meeting window being open is presence even when the keyboard is still,
+        # which is the whole reason meetings are credited rather than measured.
+        if app == "(idle)" and not rec.get("meeting_windows"):
+            continue
+        d = rec["_dt"]
+        out[d.hour * 2 + (1 if d.minute >= 30 else 0)] += gap
+    return out
+
+
+def timesheet_from_digest(cfg: dict, day: date_cls) -> tuple[list[float], bool]:
+    """Slots a reconstructed day can still evidence: spans mark a range, events a point.
+
+    Days backfilled before the sampler existed have no minute-level presence at all.
+    What they do have is timestamped evidence, which gives a floor on the hours rather
+    than a measurement of them — so the caller is told the day was reconstructed and
+    the sheet says so, instead of passing a floor off as a record.
+    """
+    out = [0.0] * SLOTS_PER_DAY
+    dg = expand(cfg["state_dir"]) / "raw" / day.strftime("%Y-%m-%d") / "digest.json"
+    if not dg.is_file():
+        return out, False
+    try:
+        src = json.loads(dg.read_text())["sources"]
+    except (json.JSONDecodeError, KeyError):
+        return out, False
+
+    def slot_of(ts):
+        d = _naive(ts)
+        return None if d is None or d.date() != day else d.hour * 2 + (1 if d.minute >= 30 else 0)
+
+    def span(a, b):
+        i, j = slot_of(a), slot_of(b)
+        if i is None:
+            return
+        for k in range(i, (j if j is not None else i) + 1):
+            out[k] += 30.0
+
+    def point(ts):
+        i = slot_of(ts)
+        if i is not None:
+            out[i] += 30.0
+
+    for ev in (src.get("calendar") or {}).get("events") or []:
+        span(ev.get("start"), ev.get("end"))
+    for m in (src.get("meetings_attended") or {}).get("meetings") or []:
+        span(m.get("start"), m.get("end"))
+    for ss in (src.get("claude_code") or {}).get("sessions") or []:
+        span(ss.get("start"), ss.get("end"))
+    for repo in (src.get("git") or {}).get("repos_with_activity") or []:
+        for c in repo.get("commits") or []:
+            point(c.get("at"))
+    for c in (src.get("shell") or {}).get("commands") or []:
+        point(c.get("at") if isinstance(c, dict) else None)
+    for f in (src.get("cloud") or {}).get("files") or []:
+        point(f.get("modified") if isinstance(f, dict) else None)
+    return out, any(out)
+
+
+def timesheet_month(cfg: dict, year: int, month: int) -> dict:
+    """The whole grid for one month, plus the per-day and per-slot totals."""
+    t = timesheet_cfg(cfg)
+    ndays = calendar.monthrange(year, month)[1]
+    grid = []                                        # grid[slot][day_index] -> bool
+    per_day, reconstructed = [], []
+    for d in range(ndays):
+        day = date_cls(year, month, d + 1)
+        slots = timesheet_day_slots(cfg, day)
+        if not any(slots):
+            slots, from_digest = timesheet_from_digest(cfg, day)
+            if from_digest:
+                reconstructed.append(d + 1)
+        per_day.append(slots)
+    for slot in range(SLOTS_PER_DAY):
+        grid.append([per_day[d][slot] >= t["min_active_minutes"] for d in range(ndays)])
+    day_totals = [sum(1 for slot in range(SLOTS_PER_DAY) if grid[slot][d])
+                  for d in range(ndays)]
+    return {"year": year, "month": month, "days": ndays, "grid": grid,
+            "reconstructed": reconstructed, "day_totals": day_totals,
+            "slot_totals": [sum(1 for v in row if v) for row in grid],
+            "total_slots": sum(day_totals),
+            "days_worked": sum(1 for n in day_totals if n)}
+
+
+def write_timesheet(cfg: dict, year: int, month: int) -> Path:
+    """Write or replace one month's sheet inside the single shared workbook."""
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    t = timesheet_cfg(cfg)
+    data = timesheet_month(cfg, year, month)
+    ndays = data["days"]
+    out = expand(cfg["output_dir"]) / t["path"]
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    wb = load_workbook(out) if out.is_file() else Workbook()
+    if "Sheet" in wb.sheetnames and wb["Sheet"].max_row == 1 and wb["Sheet"].max_column == 1:
+        del wb["Sheet"]
+    title = date_cls(year, month, 1).strftime("%b %Y")
+    if title in wb.sheetnames:
+        del wb[title]                                 # a rerun replaces, never appends
+    ws = wb.create_sheet(title)
+    # sheets read most naturally in calendar order rather than the order they were built
+    wb._sheets.sort(key=lambda sh: datetime.strptime(sh.title, "%b %Y"))
+
+    cyan = PatternFill("solid", fgColor=t["cyan"])
+    cyan_light = PatternFill("solid", fgColor=t["cyan_light"])
+    weekend_fill = PatternFill("solid", fgColor=t["weekend"])
+    white_bold = Font(bold=True, color="FFFFFFFF")
+    bold = Font(bold=True)
+    centre = Alignment(horizontal="center", vertical="center")
+    thin = Side(style="thin", color="FFD0D7DE")
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    last_col = 2 + ndays                              # A labels, B..(B+ndays-1), total
+    total_col = get_column_letter(last_col)
+
+    ws.cell(1, 1, t["owner"]).font = bold
+    if data["reconstructed"]:
+        note = ws.cell(1, 3, f"{len(data['reconstructed'])} of {ndays} days rebuilt from "
+                             "commits, sessions and meetings - a floor on the hours, "
+                             "not a measurement (the sampler was not running)")
+        note.font = Font(italic=True, color="FF8A6D3B")
+    ws.cell(2, 1, "Date \u2192").font = bold
+    ws.cell(3, 1, "Time \u2193").font = bold
+    ws.cell(2, last_col, "Slots").font = white_bold
+    ws.cell(3, last_col, "Worked").font = white_bold
+    for r in (2, 3):
+        ws.cell(r, last_col).fill = cyan
+        ws.cell(r, last_col).alignment = centre
+
+    weekend_cols = []
+    for d in range(ndays):
+        col = 2 + d
+        day = date_cls(year, month, d + 1)
+        c1 = ws.cell(2, col, d + 1)
+        c2 = ws.cell(3, col, day.strftime("%a"))
+        for c in (c1, c2):
+            c.font = white_bold
+            c.fill = cyan
+            c.alignment = centre
+            c.border = box
+        if day.isoweekday() not in cfg["work_days"]:
+            weekend_cols.append(col)
+
+    for slot in range(SLOTS_PER_DAY):
+        row = 4 + slot
+        ws.cell(row, 1, f"{slot // 2:02d}:{'30' if slot % 2 else '00'}").font = bold
+        for d in range(ndays):
+            c = ws.cell(row, 2 + d, "x" if data["grid"][slot][d] else None)
+            c.alignment = centre
+            c.border = box
+            if (2 + d) in weekend_cols and not data["grid"][slot][d]:
+                c.fill = weekend_fill
+        tot = ws.cell(row, last_col, data["slot_totals"][slot])
+        tot.alignment = centre
+        tot.font = bold
+
+    r_slots, r_hours, r_summary = 4 + SLOTS_PER_DAY, 5 + SLOTS_PER_DAY, 7 + SLOTS_PER_DAY
+    ws.cell(r_slots, 1, "Slots Worked").font = bold
+    ws.cell(r_hours, 1, "Hours Worked").font = bold
+    for d in range(ndays):
+        a = ws.cell(r_slots, 2 + d, data["day_totals"][d])
+        b = ws.cell(r_hours, 2 + d, round(data["day_totals"][d] / 2, 1))
+        for c in (a, b):
+            c.alignment = centre
+            c.border = box
+    ws.cell(r_slots, last_col, data["total_slots"]).font = bold
+    hours = round(data["total_slots"] / 2, 1)
+    ws.cell(r_hours, last_col, hours).font = bold
+    for r in (r_slots, r_hours):
+        ws.cell(r, last_col).fill = cyan_light
+        ws.cell(r, last_col).alignment = centre
+
+    worked = data["days_worked"]
+    pairs = [("Total Hours", hours),
+             ("Days Worked", worked),
+             ("Avg Hrs/Day", round(hours / worked, 1) if worked else 0.0),
+             ("% of Month", round(100 * hours / (ndays * 24), 1) / 100)]
+    for i, (label, value) in enumerate(pairs):
+        lc = ws.cell(r_summary, 1 + i * 4, label)
+        vc = ws.cell(r_summary, 3 + i * 4, value)
+        lc.font = bold
+        vc.font = bold
+        vc.alignment = centre
+        vc.fill = cyan_light
+        if label == "% of Month":
+            vc.number_format = "0.0%"
+
+    grid_ref = f"B4:{get_column_letter(1 + ndays)}{3 + SLOTS_PER_DAY}"
+    ws.conditional_formatting.add(grid_ref, CellIsRule(
+        operator="equal", formula=['"x"'], fill=cyan_light, font=Font(color=t["cyan"])))
+    # density at a glance: the busier the slot or the day, the stronger the blue
+    for ref in (f"{total_col}4:{total_col}{3 + SLOTS_PER_DAY}",
+                f"B{r_slots}:{get_column_letter(1 + ndays)}{r_slots}",
+                f"B{r_hours}:{get_column_letter(1 + ndays)}{r_hours}"):
+        ws.conditional_formatting.add(ref, ColorScaleRule(
+            start_type="min", start_color="FFFFFFFF",
+            end_type="max", end_color=t["cyan"]))
+
+    ws.freeze_panes = "B4"
+    ws.column_dimensions["A"].width = 13
+    for d in range(ndays):
+        ws.column_dimensions[get_column_letter(2 + d)].width = 4.2
+    ws.column_dimensions[total_col].width = 8
+    wb.save(out)
+    return out
+
+
+def cmd_timesheet(cfg: dict, args) -> int:
+    if not timesheet_cfg(cfg)["enabled"]:
+        print("timesheet is off - `worklog config set timesheet.enabled true`")
+        return 1
+    months = []
+    if args.all:
+        seen = set()
+        root = expand(cfg["state_dir"]) / "raw"
+        for d in sorted(p.name for p in root.iterdir() if p.is_dir()):
+            try:
+                dt = datetime.strptime(d, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            seen.add((dt.year, dt.month))
+        months = sorted(seen)
+    elif args.month:
+        try:
+            dt = datetime.strptime(args.month, "%Y-%m")
+        except ValueError:
+            die(f"bad --month {args.month!r}; use YYYY-MM")
+        months = [(dt.year, dt.month)]
+    else:
+        # run on the 1st, the month that just finished is the one to write
+        first = date_cls.today().replace(day=1)
+        last = first - timedelta(days=1)
+        months = [(last.year, last.month)]
+    path = None
+    for y, m in months:
+        path = write_timesheet(cfg, y, m)
+        d = timesheet_month(cfg, y, m)
+        log_line(cfg, f"timesheet: wrote {date_cls(y, m, 1):%b %Y} - "
+                      f"{d['total_slots'] / 2:.1f}h over {d['days_worked']} days")
+        flag = (f"  [{len(d['reconstructed'])} day(s) reconstructed, not sampled]"
+                if d["reconstructed"] else "")
+        print(f"{date_cls(y, m, 1):%b %Y}: {d['total_slots'] / 2:.1f}h, "
+              f"{d['days_worked']} days worked{flag}")
+    if path:
+        print(f"-> {path}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="worklog", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -4216,6 +4524,10 @@ def main() -> int:
                    help="print the message instead of sending it")
     q.add_argument("--quiet", action="store_true", help="send no notification")
 
+    q = sub.add_parser("timesheet", help="write the monthly hours grid to the workbook")
+    q.add_argument("--month", default=None, help="YYYY-MM (default: the month just ended)")
+    q.add_argument("--all", action="store_true", help="every month that has samples")
+
     sub.add_parser("init", help="autodetect git repo locations into config")
     sub.add_parser("notify-test", help="send a test notification")
 
@@ -4226,7 +4538,7 @@ def main() -> int:
             "pause": cmd_pause, "resume": cmd_resume, "status": cmd_status,
             "apps": cmd_apps, "config": cmd_config, "open": cmd_open,
             "init": cmd_init, "notify-test": cmd_notify_test,
-            "teams": cmd_teams}[args.cmd](cfg, args)
+            "teams": cmd_teams, "timesheet": cmd_timesheet}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

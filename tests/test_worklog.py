@@ -4,7 +4,7 @@ Lives in the repo on purpose — an earlier version sat in a session scratchpad 
 deleted with it. Uses the real config and the real data on this machine, so some checks
 are skipped when a source is unavailable rather than failing.
 """
-import json, sys, tempfile
+import json, re, sys, tempfile
 from datetime import date as D, datetime, timedelta
 from pathlib import Path
 
@@ -194,8 +194,10 @@ else:
     _eng = Path(W.__file__).read_text()
     check("the project list is not hardcoded in the engine",
           not any(a in _eng for a in _agents))
+    # a whole word, not a substring: "Alignment" contains "Ali" and is not a leak
+    _own = _tk.get("default_owner", "")
     check("the owner name is not hardcoded in the engine",
-          _tk.get("default_owner", "\x00") not in _eng)
+          not _own or not re.search(rf"\b{re.escape(_own)}\b", _eng))
     check("the project hints are not hardcoded in the engine",
           not _tk.get("agent_hints") or _tk["agent_hints"][:40] not in _eng)
     _hdr = "| Agent | Action Item | Owner(s) | Priority | Status | Time Spent | Description |"
@@ -670,6 +672,57 @@ for _fn in ("collect_git", "collect_shell", "collect_claude_code",
     _src = _i2.getsource(getattr(W, _fn))
     check(f"{_fn} scopes the pause lookup to its bounds",
           "pause_windows(cfg, day, bounds)" in _src)
+
+
+# --------------------------------------------------------------- timesheet ---
+import calendar as _cal
+_ts = W.timesheet_month(CFG, 2026, 5)
+check("a month grid is 48 slots deep", len(_ts["grid"]) == 48)
+check("May 2026 is 31 days wide", _ts["days"] == 31 and len(_ts["grid"][0]) == 31)
+check("every month's day count matches the calendar",
+      all(W.timesheet_month(CFG, 2026, m)["days"] == _cal.monthrange(2026, m)[1]
+          for m in (2, 6, 9, 12)))
+check("day totals never exceed the slots in a day",
+      all(0 <= n <= 48 for n in _ts["day_totals"]))
+check("the grand total is the sum of the days",
+      _ts["total_slots"] == sum(_ts["day_totals"]))
+check("slot totals and day totals count the same marks",
+      sum(_ts["slot_totals"]) == _ts["total_slots"])
+check("days worked counts only days with a mark",
+      _ts["days_worked"] == sum(1 for n in _ts["day_totals"] if n))
+check("May 2026 is flagged as reconstructed, not sampled", bool(_ts["reconstructed"]))
+_aug = W.timesheet_month(CFG, 2026, 8)
+check("August was sampled, so nothing is reconstructed", not _aug["reconstructed"])
+check("a sampled month reports plausible hours",
+      0 < _aug["total_slots"] / 2 < 31 * 24, f"{_aug['total_slots'] / 2}h")
+# the workbook itself: dates and weekday labels must match the real calendar
+_book = W.expand(CFG["output_dir"]) / W.timesheet_cfg(CFG)["path"]
+if not _book.is_file():
+    skip.append("timesheet: workbook not written yet")
+else:
+    from openpyxl import load_workbook as _lw
+    _wb = _lw(_book)
+    _wrong = []
+    for _name in _wb.sheetnames:
+        _ws = _wb[_name]
+        _d0 = datetime.strptime(_name, "%b %Y")
+        _nd = _cal.monthrange(_d0.year, _d0.month)[1]
+        for _i in range(_nd):
+            _day = D(_d0.year, _d0.month, _i + 1)
+            if (_ws.cell(2, 2 + _i).value != _i + 1
+                    or _ws.cell(3, 2 + _i).value != _day.strftime("%a")):
+                _wrong.append(f"{_name} day {_i + 1}")
+        if _ws.cell(2, 2 + _nd).value != "Slots":
+            _wrong.append(f"{_name} totals column")
+        if _ws.cell(2, 3 + _nd).value not in (None, ""):
+            _wrong.append(f"{_name} has a column past day {_nd}")
+        if not _ws.conditional_formatting._cf_rules:
+            _wrong.append(f"{_name} has no conditional formatting")
+    check("every sheet's dates, weekdays and formatting are right",
+          not _wrong, "; ".join(_wrong[:4]))
+    check("one workbook, one sheet per month, in calendar order",
+          _wb.sheetnames == sorted(_wb.sheetnames,
+                                   key=lambda n: datetime.strptime(n, "%b %Y")))
 
 
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")

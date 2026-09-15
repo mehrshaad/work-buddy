@@ -59,6 +59,14 @@ agent com.workbuddy.tracker "$(printf '  <key>StartInterval</key><integer>60</in
 agent com.workbuddy.summarize "$(weekdays_at 17)" report
 agent com.workbuddy.catchup "$(weekdays_at 10)" repair
 
+# The timesheet covers a whole month, so it is written once the month is over.
+if [ "$(python3 -c "import json;print(json.load(open('$ROOT/config.json')).get('timesheet',{}).get('enabled', True))" 2>/dev/null)" = "True" ]; then
+  agent com.workbuddy.timesheet "$(printf '  <key>StartCalendarInterval</key>\n  <array>\n    <dict><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>30</integer></dict>\n  </array>\n')" timesheet
+else
+  launchctl bootout "gui/$(id -u)/com.workbuddy.timesheet" 2>/dev/null || true
+  rm -f "$AGENTS/com.workbuddy.timesheet.plist"
+fi
+
 # Optional: stage the Teams summary each weekday morning. It only stages — sending stays
 # a menu-bar click — so a degraded summary never reaches anyone unread.
 teams_setting() {  # key -> value from the teams config block, empty when unset
