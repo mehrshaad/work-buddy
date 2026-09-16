@@ -812,6 +812,68 @@ else:
                                    key=lambda n: datetime.strptime(n, "%b %Y")))
 
 
+# ------------------------------------------------------------------- alerts --
+# A notification fires once and can be missed if the laptop was shut; the badge has
+# to keep saying so afterwards, and name the menu item responsible.
+_adir = TMP / "alerts"
+(_adir / "teams").mkdir(parents=True, exist_ok=True)
+_aday = D(2026, 9, 16)                       # a Wednesday
+_atarget = W.prev_workday(CFG, _aday)
+_anow = datetime.combine(_aday, datetime.min.time()).replace(hour=11)
+
+
+def _acfg(**teams):
+    return {**CFG, "state_dir": str(_adir),
+            "teams": {**W.teams_cfg(CFG), "staging_dir": str(_adir / "teams"), **teams}}
+
+
+def _stage(**rec):
+    p = _adir / "teams" / f"pending-{_atarget.isoformat()}.json"
+    p.write_text(json.dumps({"date": _atarget.isoformat(), "text": "a\nb\nc", **rec}))
+
+
+def _keys(cfg, backlog=()):
+    return {a["key"] for a in W.collect_alerts(cfg, _aday, list(backlog), _anow)}
+
+
+_stage(sent=False)
+check("a staged summary nobody sent raises an alert",
+      "summary_waiting" in _keys(_acfg(enabled=True, auto_send=False)))
+check("the alert names the menu section that owns it",
+      all(a["where"] == "summary"
+          for a in W.collect_alerts(_acfg(enabled=True, auto_send=False), _aday, [], _anow)
+          if a["key"] == "summary_waiting"))
+# the temp state dir has no samples, so the sampler alert fires here on its own —
+# these two are about the summary keys specifically
+_stage(sent=True, opened=True)
+check("a summary that was sent raises no summary alert",
+      not {k for k in _keys(_acfg(enabled=True, auto_send=False)) if k.startswith("summary")})
+_stage(sent=False, skipped=True)
+check("a summary skipped on purpose raises no summary alert",
+      not {k for k in _keys(_acfg(enabled=True, auto_send=False)) if k.startswith("summary")})
+check("a state directory with no samples does raise the sampler alert",
+      "sampler" in _keys(_acfg(enabled=True, auto_send=False)))
+_stage(sent=False)
+check("auto-send past its hour and still unsent is an alert",
+      "summary_unsent" in _keys(_acfg(enabled=True, auto_send=True, auto_send_at="10:00")))
+check("auto-send before its hour is not",
+      "summary_unsent" not in {a["key"] for a in W.collect_alerts(
+          _acfg(enabled=True, auto_send=True, auto_send_at="14:00"), _aday, [], _anow)})
+(_adir / "teams" / f"pending-{_atarget.isoformat()}.json").unlink()
+check("nothing staged by late morning is an alert",
+      "summary_missing" in _keys(_acfg(enabled=True)))
+check("teams switched off raises no summary alert",
+      not {k for k in _keys(_acfg(enabled=False)) if k.startswith("summary")})
+check("a repair backlog is an alert against the report",
+      "backlog" in _keys(_acfg(enabled=False), backlog=[D(2026, 9, 1)]))
+# and the bar must actually render them
+_plug = (Path(W.__file__).parent.parent / "swiftbar" / "workbuddy.10s.py").read_text()
+check("the menu bar badges itself when anything needs attention",
+      'warn = "\\u26a0\\ufe0e " if alerts else ""' in _plug)
+check("the menu bar marks the section each alert belongs to",
+      _plug.count('owned(') >= 4)
+
+
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
 for s in skip:
     print(f"  SKIP  {s}")

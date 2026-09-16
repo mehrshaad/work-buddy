@@ -82,8 +82,16 @@ if st.get("menubar_style", "symbol") == "buddy":
     icon = img("menubar-paused@2x.png" if paused else "menubar-tracking@2x.png")
 else:
     icon = " | sfimage=" + ("zzz" if paused else "eye.fill")
+alerts = st.get("alerts") or []
+# A notification is a moment; a badge is a state. If the laptop was shut when the
+# agent ran, the badge is the only thing that still says so an hour later.
+warn = "\u26a0\ufe0e " if alerts else ""
+def owned(where):
+    """The alerts belonging to one menu section."""
+    return [a for a in alerts if a.get("where") == where]
+
 if not show_label:
-    print(" " + icon)
+    print(f" {warn}".rstrip() + icon)
 elif paused:
     left = st.get("minutes_left")
     if st.get("indefinite") or left is None:
@@ -93,17 +101,27 @@ elif paused:
         label = f"{h}h" if m == 0 else f"{h}h {m}m"
     else:
         label = f"{int(left)}m"
-    print(f" {label}" + icon)
+    print(f" {warn}{label}" + icon)
 else:
-    print(f" {st.get('active_today', '')}".rstrip() + icon)
+    print(f" {warn}{st.get('active_today', '')}".rstrip() + icon)
 
 print("---")
+
+# ------------------------------------------------------------- needs attention --
+if alerts:
+    print(f"\u26a0\ufe0e  Needs attention | color=#c0392b {FONT}")
+    for a in alerts:
+        print(f"--{a['text']} | color=#c0392b {FONT}")
+    print(f"--- | {FONT}")
 
 # ------------------------------------------------------------------ status ----
 print(f"Work Buddy | {FONT} md=true")
 state = st.get("state", "")
 colour = "#e67e22" if paused else "#27ae60"
-print(f"{'Paused' if paused else 'Tracking'} — {state} | color={colour} {FONT}")
+_mark = "\u26a0\ufe0e  " if owned("status") else ""
+print(f"{_mark}{'Paused' if paused else 'Tracking'} — {state} | color={colour} {FONT}")
+for a in owned("status"):
+    print(f"{a['text']} | color=#c0392b {FONT}")
 if not st.get("work_time"):
     print(f"Outside work hours — the sampler is idle anyway | color=#7f8c8d {FONT}")
 if st.get("paused_today_minutes"):
@@ -183,7 +201,7 @@ for key, name in (("git", "Git commits"), ("shell", "Shell history"),
 ts = jrun("teams")
 if ts and ts.get("date"):
     print("---")
-    print(f"Daily summary | {FONT}")
+    print(f"{'\u26a0\ufe0e  ' if owned('summary') else ''}Daily summary | {FONT}")
     if not ts["staged"]:
         print(f"--Nothing staged for {ts['date']} | color=#7f8c8d {FONT}")
         act("--Prepare it now", "teams", "prepare")
@@ -209,7 +227,9 @@ if ts and ts.get("date"):
 
 # ---------------------------------------------------------------- shortcuts ----
 print("---")
-act("Write today's report now", "report")
+act(f"{'\u26a0\ufe0e  ' if owned('report') else ''}Write today's report now", "report")
+for a in owned("report"):
+    print(f"--{a['text']} | color=#c0392b {FONT}")
 # routed through the CLI rather than /usr/bin/open with a path: the output folder has a
 # space in its name, and a parameter containing one is split and silently mangled
 act("Open today's log", "open", "log")

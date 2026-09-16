@@ -77,7 +77,7 @@ PY
 }
 
 if [ "$(teams_setting enabled)" = "True" ]; then
-  agent com.workbuddy.teams "$(weekdays_at 9)" teams prepare --quiet
+  agent com.workbuddy.teams "$(weekdays_at 9)" teams prepare
   if [ "$(teams_setting auto_send)" = "True" ]; then
     # the grace period between the two is the whole point: staged early, sent later
     send_hour="$(teams_setting auto_send_at)"; send_hour="${send_hour%%:*}"

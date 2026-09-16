@@ -3651,6 +3651,51 @@ def menubar_state(cfg: dict) -> dict:
             "menubar_toggle_timer": style + ("" if timer else "+timer")}
 
 
+# Anything the user would want to act on, each tagged with the menu section that owns
+# it so the bar can badge itself and mark the exact line responsible. A notification can
+# be missed — the laptop is shut, the day starts late — so the state has to stay visible
+# rather than being announced once and forgotten.
+def collect_alerts(cfg: dict, day: date_cls, backlog: list, now: datetime) -> list[dict]:
+    out = []
+    t = teams_cfg(cfg)
+    if t["enabled"]:
+        target = prev_workday(cfg, day)
+        rec = None
+        if target:
+            p = teams_staged(cfg, target)
+            if p.is_file():
+                try:
+                    rec = json.loads(p.read_text())
+                except json.JSONDecodeError:
+                    rec = None
+        due = day.isoweekday() in cfg["work_days"]
+        staging_hour = 9
+        if due and now.hour >= staging_hour and target and rec is None:
+            out.append({"key": "summary_missing", "where": "summary",
+                        "text": f"No summary staged for {target:%a %-d %b}"})
+        elif rec and not rec.get("sent") and not rec.get("opened"):
+            if rec.get("skipped"):
+                pass                         # deliberately dropped, not a problem
+            elif not t["auto_send"]:
+                out.append({"key": "summary_waiting", "where": "summary",
+                            "text": f"{target:%a %-d %b} is staged and waiting to send"})
+            else:
+                hh = str(t["auto_send_at"]).split(":")[0]
+                late = now.hour >= int(hh) if hh.isdigit() else False
+                if late:
+                    out.append({"key": "summary_unsent", "where": "summary",
+                                "text": f"{target:%a %-d %b} did not send at "
+                                        f"{t['auto_send_at']}"})
+    if backlog:
+        out.append({"key": "backlog", "where": "report",
+                    "text": f"{len(backlog)} day(s) still need a proper write-up"})
+    h = sampler_health(cfg, day, now)
+    if h and not h["ok"] and not active_pause(cfg, now):
+        out.append({"key": "sampler", "where": "status",
+                    "text": f"Only {h['samples']} of ~{h['expected']} samples today"})
+    return out
+
+
 def cmd_status(cfg: dict, args) -> int:
     """One compact JSON object — the menu bar renders straight from this."""
     now = datetime.now()
@@ -3694,6 +3739,11 @@ def cmd_status(cfg: dict, args) -> int:
         "work_time": is_work_time(cfg, now),
         "today": day.isoformat(),
     }
+    try:
+        out["alerts"] = collect_alerts(cfg, day, backlog, now)
+    except Exception as exc:
+        out["alerts"] = [{"key": "alerts_failed", "where": "status",
+                          "text": f"could not check for problems ({exc!r})"}]
     print(json.dumps(out))
     return 0
 

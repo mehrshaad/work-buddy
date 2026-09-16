@@ -69,6 +69,15 @@ Two deliberate choices worth knowing:
 An indefinite pause still expires at the end of your workday, and reminds you every half
 hour while it is open, because the expensive failure is forgetting it is on.
 
+## When something needs you
+
+A notification fires once and is easy to miss — the laptop is shut at nine, the day
+starts late. So anything needing attention also shows as a warning on the menu bar
+icon, and the item responsible carries the same mark when you open it: a summary
+staged and never sent, a morning where nothing was staged at all, days still waiting
+on a proper write-up, or a sampler that has recorded far fewer samples than the time
+elapsed. The badge clears itself when the cause does.
+
 ## Self-repair
 
 The report runs at the end of the day, which is exactly when a laptop tends to be shut or
