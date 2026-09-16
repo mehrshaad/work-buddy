@@ -872,7 +872,7 @@ _plug = _plugfile.read_text()
 check("the menu bar badges itself when anything needs attention",
       "warn = WARN if alerts else \"\"" in _plug)
 check("the menu bar marks the section each alert belongs to",
-      _plug.count("mark(") >= 4)
+      _plug.count("warn_for(") >= 4)
 # SwiftBar runs the plugin through its own `env python3`, which on a Mac resolves to
 # the system one — older than whatever the shell has. Checking syntax with the newest
 # interpreter present is how a plugin that cannot start still passed its tests.
@@ -893,6 +893,34 @@ for _py in _pys:
         _broken.append(f"{_py} ({_v}): {_r.stderr.strip().splitlines()[-1][:90]}")
 check(f"the menu bar plugin compiles under every python here ({', '.join(sorted(_seen))})",
       not _broken, "; ".join(_broken))
+# Compiling is not running. A name shadowed halfway down the script only breaks once
+# the list above it is non-empty, which a stub never reproduces — so run the real
+# thing against the real CLI and insist it reaches the end.
+_ran = []
+for _py in sorted(_seen and {p for p in _pys} or []):
+    _r = subprocess.run([_py, str(_plugfile)], capture_output=True, text=True)
+    if _r.returncode != 0 or "Traceback" in _r.stdout + _r.stderr:
+        _last = (_r.stdout + _r.stderr).strip().splitlines()[-1:] or [""]
+        _ran.append(f"{_py}: {_last[0][:90]}")
+check("the menu bar plugin runs to the end without raising", not _ran, "; ".join(_ran))
+_out = subprocess.run([_pys[0], str(_plugfile)], capture_output=True, text=True).stdout
+if "could not reach the CLI" in _out:
+    # a fresh checkout has no worklog on PATH yet, so the plugin renders its own
+    # error card and there are no sections to look for
+    skip.append("menu bar: the CLI shim is not installed (run ./install.sh)")
+else:
+    check("the menu bar renders every section, not just the ones before a crash",
+          all(_sec in _out for _sec in ("Work Buddy", "Apps", "Settings",
+                                        "Write today's report now")),
+          _out[-120:])
+    # every colour must carry a light and a dark value, or one theme gets a
+    # mid-tone that washes out
+    _colours = re.findall(r"color=(#[0-9a-fA-F]{6}(?:,#[0-9a-fA-F]{6})?)", _plug)
+    check("every colour is given for both light and dark bars",
+          _colours and all("," in c for c in _colours),
+          ", ".join(c for c in _colours if "," not in c))
+check("no helper is shadowed by a later assignment",
+      "def mark(" not in _plug or "\n    mark = " not in _plug)
 
 
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")

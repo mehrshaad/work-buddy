@@ -68,7 +68,7 @@ st = jrun("status")
 if st is None:
     print("⚠" + img("menubar-paused@2x.png"))
     print("---")
-    print(f"Work Buddy could not reach the CLI | color=#c0392b {FONT}")
+    print(f"Work Buddy could not reach the CLI | color=#a11d10,#ff6b5b {FONT}")
     print(f"Checked: {WORKLOG} | {FONT}")
     sys.exit(0)
 
@@ -88,6 +88,9 @@ alerts = st.get("alerts") or []
 # Held as a constant because an escape inside an f-string expression is a syntax
 # error before Python 3.12, and this plugin runs under whichever python3 SwiftBar
 # resolves — on this machine the system one, which is older than the shell's.
+# Colours are given as "light,dark". The single mid-tone values these replaced were
+# picked against a dark bar and washed out on a light one, where a thin glyph needs a
+# darker, more saturated ink to read at all.
 WARN = "\u26a0\ufe0e "
 warn = WARN if alerts else ""
 
@@ -97,8 +100,13 @@ def owned(where):
     return [a for a in alerts if a.get("where") == where]
 
 
-def mark(where):
-    """The warning prefix for a section's own line, or nothing."""
+def warn_for(where):
+    """The warning prefix for a section's own line, or nothing.
+
+    Deliberately not called `mark`: the apps list binds that name to a tick glyph,
+    and a helper shadowed halfway down the script fails only once the list is
+    non-empty — which a stubbed test never reproduces.
+    """
     return WARN + " " if owned(where) else ""
 
 if not show_label:
@@ -120,23 +128,23 @@ print("---")
 
 # ------------------------------------------------------------- needs attention --
 if alerts:
-    print(f"{WARN} Needs attention | color=#c0392b {FONT}")
+    print(f"{WARN} Needs attention | color=#a11d10,#ff6b5b {FONT}")
     for a in alerts:
-        print(f"--{a['text']} | color=#c0392b {FONT}")
+        print(f"--{a['text']} | color=#a11d10,#ff6b5b {FONT}")
     print(f"--- | {FONT}")
 
 # ------------------------------------------------------------------ status ----
 print(f"Work Buddy | {FONT} md=true")
 state = st.get("state", "")
-colour = "#e67e22" if paused else "#27ae60"
-_mark = mark("status")
+colour = "#a85503,#ffa94d" if paused else "#12703d,#4ade80"
+_mark = warn_for("status")
 print(f"{_mark}{'Paused' if paused else 'Tracking'} — {state} | color={colour} {FONT}")
 for a in owned("status"):
-    print(f"{a['text']} | color=#c0392b {FONT}")
+    print(f"{a['text']} | color=#a11d10,#ff6b5b {FONT}")
 if not st.get("work_time"):
-    print(f"Outside work hours — the sampler is idle anyway | color=#7f8c8d {FONT}")
+    print(f"Outside work hours — the sampler is idle anyway | color=#5b6770,#a4b0be {FONT}")
 if st.get("paused_today_minutes"):
-    print(f"Paused {st['paused_today_minutes']:g}m today | color=#7f8c8d {FONT}")
+    print(f"Paused {st['paused_today_minutes']:g}m today | color=#5b6770,#a4b0be {FONT}")
 
 print("---")
 if paused:
@@ -159,12 +167,12 @@ if tok:
           f"context now ~{tok['context_now'] // 1000}K | {FONT}")
     if tok.get("long_sessions"):
         print(f"--⚠ {tok['long_sessions']} session(s) carrying 300+ turns — /clear at the "
-              f"next task boundary | color=#e67e22 {FONT}")
+              f"next task boundary | color=#a85503,#ffa94d {FONT}")
 if st.get("current_meeting"):
-    print(f"In a meeting: {st['current_meeting']} | color=#2980b9 {FONT}")
+    print(f"In a meeting: {st['current_meeting']} | color=#14557f,#63b3ed {FONT}")
 degraded = st.get("degraded_days") or []
 if degraded:
-    print(f"⚠ {len(degraded)} day(s) awaiting summary | color=#e67e22 {FONT}")
+    print(f"⚠ {len(degraded)} day(s) awaiting summary | color=#a85503,#ffa94d {FONT}")
     for d in degraded:
         print(f"--{d} | {FONT}")
     act("--Summarize them now", "repair")
@@ -174,14 +182,14 @@ print("---")
 print(f"Apps | {FONT}")
 apps = jrun("apps", "--days", "7") or []
 if not apps:
-    print(f"--Nothing sampled yet | color=#7f8c8d {FONT}")
+    print(f"--Nothing sampled yet | color=#5b6770,#a4b0be {FONT}")
 for a in apps[:22]:
     mark = "☒" if a["excluded"] else "☑"
     verb = "include-app" if a["excluded"] else "exclude-app"
     mins = f"  ({a['minutes']}m)" if a.get("minutes") else ""
     act(f"--{mark}  {a['app']}{mins}", "config", verb, *a["app"].split())
 print(f"--- | {FONT}")
-print(f"--Ticked apps are recorded; unticked are ignored entirely | color=#7f8c8d {FONT}")
+print(f"--Ticked apps are recorded; unticked are ignored entirely | color=#5b6770,#a4b0be {FONT}")
 
 # ----------------------------------------------------------------- settings ----
 print(f"Settings | {FONT}")
@@ -212,23 +220,23 @@ for key, name in (("git", "Git commits"), ("shell", "Shell history"),
 ts = jrun("teams")
 if ts and ts.get("date"):
     print("---")
-    print(f"{mark('summary')}Daily summary | {FONT}")
+    print(f"{warn_for('summary')}Daily summary | {FONT}")
     if not ts["staged"]:
-        print(f"--Nothing staged for {ts['date']} | color=#7f8c8d {FONT}")
+        print(f"--Nothing staged for {ts['date']} | color=#5b6770,#a4b0be {FONT}")
         act("--Prepare it now", "teams", "prepare")
     elif ts["sent"]:
         at = (ts.get("sent_at") or "")[11:16]
-        print(f"--Sent {ts['date']} at {at} | color=#27ae60 {FONT}")
+        print(f"--Sent {ts['date']} at {at} | color=#12703d,#4ade80 {FONT}")
         act("--Send it again", "teams", "send")
     elif not ts["configured"]:
-        print(f"--Ready: {ts['date']} ({ts['lines']} lines) | color=#e67e22 {FONT}")
-        print(f"--No flow URL or recipient configured yet | color=#c0392b {FONT}")
+        print(f"--Ready: {ts['date']} ({ts['lines']} lines) | color=#a85503,#ffa94d {FONT}")
+        print(f"--No flow URL or recipient configured yet | color=#a11d10,#ff6b5b {FONT}")
     else:
         when = "" if not ts.get("auto_send") else f", sends at {ts.get('auto_send_at')}"
         if ts.get("skipped"):
-            print(f"--Skipped: {ts['date']} ({ts['lines']} lines) | color=#7f8c8d {FONT}")
+            print(f"--Skipped: {ts['date']} ({ts['lines']} lines) | color=#5b6770,#a4b0be {FONT}")
         else:
-            print(f"--Ready: {ts['date']} ({ts['lines']} lines){when} | color=#e67e22 {FONT}")
+            print(f"--Ready: {ts['date']} ({ts['lines']} lines){when} | color=#a85503,#ffa94d {FONT}")
         act("--Send it now", "teams", "send")
         if not ts.get("skipped"):
             act("--Skip this one", "teams", "skip")
@@ -238,9 +246,9 @@ if ts and ts.get("date"):
 
 # ---------------------------------------------------------------- shortcuts ----
 print("---")
-act(f"{mark('report')}Write today's report now", "report")
+act(f"{warn_for('report')}Write today's report now", "report")
 for a in owned("report"):
-    print(f"--{a['text']} | color=#c0392b {FONT}")
+    print(f"--{a['text']} | color=#a11d10,#ff6b5b {FONT}")
 # routed through the CLI rather than /usr/bin/open with a path: the output folder has a
 # space in its name, and a parameter containing one is split and silently mangled
 act("Open today's log", "open", "log")
