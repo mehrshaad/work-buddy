@@ -85,10 +85,21 @@ else:
 alerts = st.get("alerts") or []
 # A notification is a moment; a badge is a state. If the laptop was shut when the
 # agent ran, the badge is the only thing that still says so an hour later.
-warn = "\u26a0\ufe0e " if alerts else ""
+# Held as a constant because an escape inside an f-string expression is a syntax
+# error before Python 3.12, and this plugin runs under whichever python3 SwiftBar
+# resolves — on this machine the system one, which is older than the shell's.
+WARN = "\u26a0\ufe0e "
+warn = WARN if alerts else ""
+
+
 def owned(where):
     """The alerts belonging to one menu section."""
     return [a for a in alerts if a.get("where") == where]
+
+
+def mark(where):
+    """The warning prefix for a section's own line, or nothing."""
+    return WARN + " " if owned(where) else ""
 
 if not show_label:
     print(f" {warn}".rstrip() + icon)
@@ -109,7 +120,7 @@ print("---")
 
 # ------------------------------------------------------------- needs attention --
 if alerts:
-    print(f"\u26a0\ufe0e  Needs attention | color=#c0392b {FONT}")
+    print(f"{WARN} Needs attention | color=#c0392b {FONT}")
     for a in alerts:
         print(f"--{a['text']} | color=#c0392b {FONT}")
     print(f"--- | {FONT}")
@@ -118,7 +129,7 @@ if alerts:
 print(f"Work Buddy | {FONT} md=true")
 state = st.get("state", "")
 colour = "#e67e22" if paused else "#27ae60"
-_mark = "\u26a0\ufe0e  " if owned("status") else ""
+_mark = mark("status")
 print(f"{_mark}{'Paused' if paused else 'Tracking'} — {state} | color={colour} {FONT}")
 for a in owned("status"):
     print(f"{a['text']} | color=#c0392b {FONT}")
@@ -201,7 +212,7 @@ for key, name in (("git", "Git commits"), ("shell", "Shell history"),
 ts = jrun("teams")
 if ts and ts.get("date"):
     print("---")
-    print(f"{'\u26a0\ufe0e  ' if owned('summary') else ''}Daily summary | {FONT}")
+    print(f"{mark('summary')}Daily summary | {FONT}")
     if not ts["staged"]:
         print(f"--Nothing staged for {ts['date']} | color=#7f8c8d {FONT}")
         act("--Prepare it now", "teams", "prepare")
@@ -227,7 +238,7 @@ if ts and ts.get("date"):
 
 # ---------------------------------------------------------------- shortcuts ----
 print("---")
-act(f"{'\u26a0\ufe0e  ' if owned('report') else ''}Write today's report now", "report")
+act(f"{mark('report')}Write today's report now", "report")
 for a in owned("report"):
     print(f"--{a['text']} | color=#c0392b {FONT}")
 # routed through the CLI rather than /usr/bin/open with a path: the output folder has a

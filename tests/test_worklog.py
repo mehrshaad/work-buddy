@@ -4,7 +4,7 @@ Lives in the repo on purpose — an earlier version sat in a session scratchpad 
 deleted with it. Uses the real config and the real data on this machine, so some checks
 are skipped when a source is unavailable rather than failing.
 """
-import json, re, sys, tempfile
+import json, re, subprocess, sys, tempfile
 from datetime import date as D, datetime, timedelta
 from pathlib import Path
 
@@ -867,11 +867,32 @@ check("teams switched off raises no summary alert",
 check("a repair backlog is an alert against the report",
       "backlog" in _keys(_acfg(enabled=False), backlog=[D(2026, 9, 1)]))
 # and the bar must actually render them
-_plug = (Path(W.__file__).parent.parent / "swiftbar" / "workbuddy.10s.py").read_text()
+_plugfile = Path(W.__file__).parent.parent / "swiftbar" / "workbuddy.10s.py"
+_plug = _plugfile.read_text()
 check("the menu bar badges itself when anything needs attention",
-      'warn = "\\u26a0\\ufe0e " if alerts else ""' in _plug)
+      "warn = WARN if alerts else \"\"" in _plug)
 check("the menu bar marks the section each alert belongs to",
-      _plug.count('owned(') >= 4)
+      _plug.count("mark(") >= 4)
+# SwiftBar runs the plugin through its own `env python3`, which on a Mac resolves to
+# the system one — older than whatever the shell has. Checking syntax with the newest
+# interpreter present is how a plugin that cannot start still passed its tests.
+import shutil as _sh
+_pys = [p for p in ("/usr/bin/python3", "/usr/local/bin/python3",
+                    "/opt/homebrew/bin/python3", _sh.which("python3")) if p and Path(p).exists()]
+_seen, _broken = set(), []
+for _py in _pys:
+    _v = subprocess.run([_py, "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
+                        capture_output=True, text=True).stdout.strip()
+    if _v in _seen:
+        continue
+    _seen.add(_v)
+    _r = subprocess.run(
+        [_py, "-c", "import py_compile,sys;py_compile.compile(sys.argv[1],doraise=True)",
+         str(_plugfile)], capture_output=True, text=True)
+    if _r.returncode != 0:
+        _broken.append(f"{_py} ({_v}): {_r.stderr.strip().splitlines()[-1][:90]}")
+check(f"the menu bar plugin compiles under every python here ({', '.join(sorted(_seen))})",
+      not _broken, "; ".join(_broken))
 
 
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
