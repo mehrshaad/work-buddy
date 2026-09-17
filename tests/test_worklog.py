@@ -859,6 +859,16 @@ check("auto-send past its hour and still unsent is an alert",
 check("auto-send before its hour is not",
       "summary_unsent" not in {a["key"] for a in W.collect_alerts(
           _acfg(enabled=True, auto_send=True, auto_send_at="14:00"), _aday, [], _anow)})
+# a restage between a manual send and the automatic one must not resurrect the day
+_stage(sent=True, opened=True, route="flow")
+_rec = json.loads((_adir / "teams" / f"pending-{_atarget.isoformat()}.json").read_text())
+_kept = {k: _rec[k] for k in ("sent", "opened", "route") if k in _rec}
+check("a sent day survives being staged again",
+      _kept == {"sent": True, "opened": True, "route": "flow"})
+_psrc = __import__("inspect").getsource(W.teams_prepare)
+check("prepare carries the send state onto the new record",
+      '"sent", "opened", "opened_at", "route"' in _psrc and "**keep}" in _psrc)
+
 (_adir / "teams" / f"pending-{_atarget.isoformat()}.json").unlink()
 check("nothing staged by late morning is an alert",
       "summary_missing" in _keys(_acfg(enabled=True)))

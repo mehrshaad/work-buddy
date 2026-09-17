@@ -4042,9 +4042,25 @@ def teams_prepare(cfg: dict, day: date_cls, quiet: bool = False) -> int:
             notify(cfg, "Daily summary not ready", err or "nothing to send")
         return 1
 
-    teams_staged(cfg, day).write_text(json.dumps(
+    # Re-staging must not forget that the day already went out. A second prepare can
+    # overlap the first — the agent at 09:00 and a menu-bar press a minute earlier —
+    # and rebuilding the record from scratch between a manual send and the automatic
+    # one is what made the same summary arrive twice.
+    path = teams_staged(cfg, day)
+    prior = {}
+    if path.is_file():
+        try:
+            prior = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            prior = {}
+    keep = {k: prior[k] for k in ("sent", "opened", "opened_at", "route", "http",
+                                  "skipped", "prefilled") if k in prior}
+    if keep.get("sent") or keep.get("opened"):
+        log_line(cfg, f"teams: {day} was already sent, keeping that on the restage")
+    path.write_text(json.dumps(
         {"date": day.isoformat(), "staged_at": datetime.now().isoformat(timespec="seconds"),
-         "text": body, "sent": False}, ensure_ascii=False, indent=2), encoding="utf-8")
+         "text": body, "sent": False, **keep}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
     log_line(cfg, f"teams: staged {day} ({len(body.splitlines())} lines) for review")
     if not quiet:
         notify(cfg, "Daily summary ready to send",
