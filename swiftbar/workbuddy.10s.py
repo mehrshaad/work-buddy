@@ -251,6 +251,7 @@ for a in owned("report"):
     print(f"--{a['text']} | color=#a11d10,#ff6b5b {FONT}")
 # routed through the CLI rather than /usr/bin/open with a path: the output folder has a
 # space in its name, and a parameter containing one is split and silently mangled
+act("Write a note for the report", "open", "notes")
 act("Open today's log", "open", "log")
 act("Open the log folder", "open", "folder")
 act("Edit the configuration", "open", "config")

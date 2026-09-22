@@ -2345,6 +2345,58 @@ def collect_mis_board(cfg: dict, day: date_cls) -> dict:
             "note": "Hours Spent is not read: the column defaults to 1h and is unreliable"}
 
 
+NOTES_DEFAULTS = {"enabled": True, "path": "~/.worklog/notes.md"}
+NOTES_TEMPLATE = """# Notes for the next report
+
+Anything the tracker cannot see — work on another machine, a call it missed, a
+decision taken away from the keyboard. Plain bullets are enough.
+
+This file is emptied once its contents have gone into a report.
+
+- """
+
+
+def notes_path(cfg: dict) -> Path:
+    return expand({**NOTES_DEFAULTS, **(cfg.get("notes") or {})}["path"])
+
+
+def notes_body(cfg: dict) -> str:
+    """What the user actually typed, with the template's own prose stripped out."""
+    p = notes_path(cfg)
+    if not p.is_file():
+        return ""
+    keep = []
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        t = line.strip()
+        if not t or t.startswith("#") or t == "-":
+            continue
+        if t.startswith("Anything the tracker") or t.startswith("decision taken") \
+                or t.startswith("This file is emptied"):
+            continue
+        keep.append(t)
+    return "\n".join(keep).strip()
+
+
+def collect_notes(cfg: dict) -> dict:
+    ncfg = {**NOTES_DEFAULTS, **(cfg.get("notes") or {})}
+    if not ncfg["enabled"]:
+        return {"available": False, "reason": "disabled"}
+    body = notes_body(cfg)
+    if not body:
+        return {"available": False, "reason": "nothing written"}
+    return {"available": True, "text": body, "lines": len(body.splitlines())}
+
+
+def clear_notes(cfg: dict) -> bool:
+    """Reset the file to its template once its contents are in a report."""
+    p = notes_path(cfg)
+    if not notes_body(cfg):
+        return False
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(NOTES_TEMPLATE, encoding="utf-8")
+    return True
+
+
 def build_digest(cfg: dict, day: date_cls) -> dict:
     start, end = window_bounds(cfg, day)
     attended = collect_meetings_attended(cfg, day)
@@ -2358,6 +2410,7 @@ def build_digest(cfg: dict, day: date_cls) -> dict:
             "activity": collect_activity(cfg, day),
             "git": collect_git(cfg, day),
             "shell": collect_shell(cfg, day),
+            "notes": collect_notes(cfg),
             "calendar": calendar,
             "meetings_attended": attended,
             "unjoined_meetings": collect_unjoined_meetings(cfg, day, attended, calendar),
@@ -2404,6 +2457,13 @@ Rules:
 - Group under short bold area headings (project or area names, e.g. **Backend**, **Infra**, **Meetings**). If everything is one area, skip headings and use a flat list.
 - Include a number or named artefact as evidence when the data records one (commit subject, file name, doc name). Keep it inside the sentence.
 - 3-10 bullets. Neutral and factual — audience is the user's manager. No self-praise, no "successfully", no process narration.
+- `sources.notes` is the user's own account of work the machine could not see — another
+  device, an offline call, a decision away from the keyboard. Treat it as fact, on the
+  same footing as a commit, and merge rather than append: where it completes a bullet the
+  evidence already supports, fold the detail into that bullet; where it describes work
+  nothing else recorded, add a bullet for it under the right heading; where it only
+  restates what the evidence already shows, ignore it. Never quote it verbatim as its own
+  section, and never mention that a note existed.
 - Base every bullet on evidence in the JSON. Commit subjects, meeting names (meetings_attended and unjoined_meetings) and Claude Code prompts are the strongest signals of intent; app/window time and shell commands are supporting context only.
 - When commits exist, describe what actually changed using the commit subject, body and changed-file stats. If more than one repo has commits, make clear per repo what was done (separate bullets or separate area headings per repo).
 - Do NOT invent work. Do NOT list raw app names or timings as bullets. In the summary bullets
@@ -2976,7 +3036,10 @@ def _addendum_tail(text: str) -> str:
 # which now reports today. Everything else — the activity samples, git, the ICS feed, the
 # board export, the Claude Code transcripts — is still on disk, so a repair re-collects it
 # and picks up whatever the collectors learned since the day ran.
-LOSSY_SOURCES = ("shell", "cloud")
+# Nothing can re-collect these after the fact: shell history has no per-day archive,
+# cloud mtimes move on, and the notes file is emptied once its contents are in a
+# report. A repair therefore reuses what the stored digest already holds.
+LOSSY_SOURCES = ("shell", "cloud", "notes")
 
 
 def load_digest(cfg: dict, day: date_cls) -> dict | None:
@@ -3386,6 +3449,10 @@ def cmd_report(cfg: dict, args) -> int:
     raw_dir.mkdir(parents=True, exist_ok=True)
     (raw_dir / "digest.json").write_text(
         json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    # The notes are in the digest now, which is what a repair reads, so the file can go
+    # back to being empty for whatever comes next.
+    if (d["sources"].get("notes") or {}).get("available") and clear_notes(cfg):
+        log_line(cfg, f"notes: folded into {day}'s report and cleared")
 
     log_line(cfg, f"report: wrote {out_path} via {method} — {digest_headline(d)}")
 
@@ -3872,6 +3939,11 @@ def cmd_open(cfg: dict, args) -> int:
         target = out_dir
     elif args.what == "config":
         target = expand(cfg["state_dir"]) / "config.json"
+    elif args.what == "notes":
+        target = notes_path(cfg)
+        if not target.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(NOTES_TEMPLATE, encoding="utf-8")
     else:
         target = out_dir / f"{resolve_day(getattr(args, 'date', None)).isoformat()}.md"
         if not target.is_file():
@@ -4685,7 +4757,7 @@ def main() -> int:
 
     q = sub.add_parser("open", help="open a log or folder in Finder")
     q.add_argument("what", nargs="?", default="log",
-                   choices=["log", "folder", "config"])
+                   choices=["log", "folder", "config", "notes"])
     q.add_argument("--date", default="today")
     q = sub.add_parser("teams", help="stage and send the day's summary to a Teams chat")
     q.add_argument("action", nargs="?", default="state",

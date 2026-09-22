@@ -238,5 +238,9 @@
     "path": "Work Hours.xlsx",
     "owner": "",
     "min_active_minutes": 0.01
+  },
+  "notes": {
+    "enabled": true,
+    "path": "~/.worklog/notes.md"
   }
 }

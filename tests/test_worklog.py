@@ -933,6 +933,38 @@ check("no helper is shadowed by a later assignment",
       "def mark(" not in _plug or "\n    mark = " not in _plug)
 
 
+# --------------------------------------------------------------------- notes --
+_ndir = TMP / "notes"
+_ndir.mkdir(exist_ok=True)
+_ncfg = {**CFG, "notes": {"enabled": True, "path": str(_ndir / "notes.md")}}
+_np = W.notes_path(_ncfg)
+_np.write_text(W.NOTES_TEMPLATE)
+check("an untouched template counts as nothing written",
+      not W.collect_notes(_ncfg)["available"])
+_np.write_text(W.NOTES_TEMPLATE + "\n- Reviewed a contract on another machine.")
+check("what the user typed is picked up",
+      W.collect_notes(_ncfg)["available"])
+check("the template's own prose is not treated as a note",
+      "Anything the tracker" not in W.notes_body(_ncfg)
+      and "another machine" in W.notes_body(_ncfg))
+check("clearing resets the file to the template", W.clear_notes(_ncfg)
+      and not W.collect_notes(_ncfg)["available"])
+check("clearing an already-empty file reports nothing to do",
+      not W.clear_notes(_ncfg))
+check("notes are disabled by config",
+      not W.collect_notes({**CFG, "notes": {"enabled": False}})["available"])
+# the file is emptied once used, so a repair has to reuse the stored copy
+check("notes are treated as unrecoverable, like shell and cloud",
+      "notes" in W.LOSSY_SOURCES)
+check("the summarizer is told to merge notes rather than append them",
+      "sources.notes" in W.SUMMARY_PROMPT and "merge rather than append" in W.SUMMARY_PROMPT)
+check("the report clears the notes only after writing the digest",
+      "clear_notes(cfg)" in __import__("inspect").getsource(W.cmd_report))
+check("the menu bar can open the notes file",
+      '"open", "notes"' in (Path(W.__file__).parent.parent / "swiftbar"
+                            / "workbuddy.10s.py").read_text())
+
+
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
 for s in skip:
     print(f"  SKIP  {s}")

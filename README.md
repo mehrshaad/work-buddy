@@ -69,6 +69,25 @@ Two deliberate choices worth knowing:
 An indefinite pause still expires at the end of your workday, and reminds you every half
 hour while it is open, because the expensive failure is forgetting it is on.
 
+## Telling it what it could not see
+
+Work on another machine, a call it missed, a decision taken away from the keyboard —
+write it in the notes file and the next report folds it in:
+
+```
+worklog open notes          # or "Write a note for the report" in the menu bar
+```
+
+The summarizer treats a note as fact, on the same footing as a commit, and merges
+rather than appends: a note that completes a bullet the evidence already supports is
+folded into it, one describing work nothing else recorded becomes its own bullet, and
+one that only restates what is already there is dropped. Nothing is quoted verbatim and
+the report never mentions that a note existed.
+
+The file is emptied as soon as its contents reach a report, ready for the next day. The
+text rides along in that day's stored digest, which is what a repair reads, so rebuilding
+the day later keeps the work.
+
 ## When something needs you
 
 A notification fires once and is easy to miss — the laptop is shut at nine, the day
