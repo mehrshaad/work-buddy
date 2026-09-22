@@ -78,6 +78,11 @@ write it in the notes file and the next report folds it in:
 worklog open notes          # or "Write a note for the report" in the menu bar
 ```
 
+Set `notes.editor` to an application name — `"Visual Studio Code"`, `"TextEdit"` — and
+every file this tool opens goes there. Leave it empty for the system default, which on a
+Mac is whatever last claimed `.md` and is often not what you want to type into. This
+changes nothing system-wide.
+
 The summarizer treats a note as fact, on the same footing as a commit, and merges
 rather than appends: a note that completes a bullet the evidence already supports is
 folded into it, one describing work nothing else recorded becomes its own bullet, and

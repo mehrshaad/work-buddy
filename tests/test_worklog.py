@@ -960,6 +960,15 @@ check("the summarizer is told to merge notes rather than append them",
       "sources.notes" in W.SUMMARY_PROMPT and "merge rather than append" in W.SUMMARY_PROMPT)
 check("the report clears the notes only after writing the digest",
       "clear_notes(cfg)" in __import__("inspect").getsource(W.cmd_report))
+_osrc = __import__("inspect").getsource(W.cmd_open)
+check("an editor preference is honoured when one is set",
+      '"-a", editor' in _osrc)
+check("it falls back to the system default if that editor fails",
+      "using the default" in _osrc)
+check("a folder always goes to Finder, whatever the editor is",
+      "target.is_file()" in _osrc)
+check("no editor configured means the system default",
+      W.NOTES_DEFAULTS["editor"] == "")
 check("the menu bar can open the notes file",
       '"open", "notes"' in (Path(W.__file__).parent.parent / "swiftbar"
                             / "workbuddy.10s.py").read_text())

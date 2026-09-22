@@ -241,6 +241,7 @@
   },
   "notes": {
     "enabled": true,
-    "path": "~/.worklog/notes.md"
+    "path": "~/.worklog/notes.md",
+    "editor": ""
   }
 }

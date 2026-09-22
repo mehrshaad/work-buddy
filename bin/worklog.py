@@ -2345,7 +2345,11 @@ def collect_mis_board(cfg: dict, day: date_cls) -> dict:
             "note": "Hours Spent is not read: the column defaults to 1h and is unreliable"}
 
 
-NOTES_DEFAULTS = {"enabled": True, "path": "~/.worklog/notes.md"}
+# `editor` names an application to open text files with. Empty means the system
+# default for the file type, which on a Mac is whatever last claimed .md — often not
+# the thing you want to type into. Setting it here changes only this tool's own
+# "open" commands, not the system-wide association.
+NOTES_DEFAULTS = {"enabled": True, "path": "~/.worklog/notes.md", "editor": ""}
 NOTES_TEMPLATE = """# Notes for the next report
 
 Anything the tracker cannot see — work on another machine, a call it missed, a
@@ -3948,7 +3952,14 @@ def cmd_open(cfg: dict, args) -> int:
         target = out_dir / f"{resolve_day(getattr(args, 'date', None)).isoformat()}.md"
         if not target.is_file():
             target = out_dir
-    rc, _, err = run(["/usr/bin/open", str(target)], timeout=20)
+    editor = {**NOTES_DEFAULTS, **(cfg.get("notes") or {})}["editor"]
+    # the folder is for Finder whatever the editor preference says
+    cmd = (["/usr/bin/open", "-a", editor, str(target)]
+           if editor and target.is_file() else ["/usr/bin/open", str(target)])
+    rc, _, err = run(cmd, timeout=20)
+    if rc != 0 and editor and target.is_file():
+        log_line(cfg, f"open: {editor} could not open {target.name}, using the default")
+        rc, _, err = run(["/usr/bin/open", str(target)], timeout=20)
     if rc != 0:
         log_line(cfg, f"open: failed for {target} — {err[:200]}")
         print(f"could not open {target}")
