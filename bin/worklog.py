@@ -2369,13 +2369,14 @@ def notes_body(cfg: dict) -> str:
     p = notes_path(cfg)
     if not p.is_file():
         return ""
+    # Anything the template itself put there is not a note. Compared against the
+    # template's own lines rather than hardcoded phrases, so rewording it cannot
+    # quietly start feeding the instructions into the report.
+    boilerplate = {ln.strip() for ln in NOTES_TEMPLATE.splitlines() if ln.strip()}
     keep = []
     for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
         t = line.strip()
-        if not t or t.startswith("#") or t == "-":
-            continue
-        if t.startswith("Anything the tracker") or t.startswith("decision taken") \
-                or t.startswith("This file is emptied"):
+        if not t or t == "-" or t.startswith("#") or t in boilerplate:
             continue
         keep.append(t)
     return "\n".join(keep).strip()

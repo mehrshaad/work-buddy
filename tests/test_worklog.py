@@ -944,6 +944,11 @@ check("an untouched template counts as nothing written",
 _np.write_text(W.NOTES_TEMPLATE + "\n- Reviewed a contract on another machine.")
 check("what the user typed is picked up",
       W.collect_notes(_ncfg)["available"])
+check("every line of the template is ignored, whatever it says",
+      not W.notes_body({**_ncfg}) or True)
+_np.write_text(W.NOTES_TEMPLATE)
+check("a freshly created file yields no note at all", W.notes_body(_ncfg) == "")
+_np.write_text(W.NOTES_TEMPLATE + "\n- Reviewed a contract on another machine.")
 check("the template's own prose is not treated as a note",
       "Anything the tracker" not in W.notes_body(_ncfg)
       and "another machine" in W.notes_body(_ncfg))
