@@ -4010,6 +4010,11 @@ def teams_message(cfg: dict, text: str, html: bool = False) -> str:
 
 def teams_prepare(cfg: dict, day: date_cls, quiet: bool = False) -> int:
     """Make the day fit to send, then stage it. Never sends."""
+    # Two prepares can overlap — the 09:00 agent and a menu-bar press a minute before —
+    # and both repair and restage the same day. One is enough.
+    if report_lock(cfg) is None:
+        log_line(cfg, "teams: another run holds the lock, exiting")
+        return 0
     added = None
     try:
         # yesterday's evening work is appended by today's report, which has not run yet
