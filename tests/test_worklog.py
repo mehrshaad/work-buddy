@@ -961,6 +961,23 @@ check("notes are disabled by config",
 # the file is emptied once used, so a repair has to reuse the stored copy
 check("notes are treated as unrecoverable, like shell and cloud",
       "notes" in W.LOSSY_SOURCES)
+# a note written after the first report must survive the repair that follows it
+_old = {"available": True, "text": "- yesterday's note", "lines": 1}
+_new = {"available": True, "text": "- yesterday's note\n- a call taken on my phone",
+        "lines": 2}
+check("a repair keeps both the stored note and anything written since",
+      W.merge_notes(_old, _new)["text"].splitlines()
+      == ["- yesterday's note", "- a call taken on my phone"])
+check("merging does not repeat a line", W.merge_notes(_old, _old)["lines"] == 1)
+check("a repair with nothing newly written keeps the stored note",
+      W.merge_notes(_old, None)["text"] == "- yesterday's note")
+check("a note written for the first time on a repair is not lost",
+      W.merge_notes({"available": False}, _new)["lines"] == 2)
+check("the repair path merges notes instead of replacing them",
+      "merge_notes(stored" in __import__("inspect").getsource(W.load_digest))
+check("the summarizer is told a note reaches every section it bears on",
+      "EVERY part of the report" in W.SUMMARY_PROMPT
+      and "Preferring **Other**" in W.SUMMARY_PROMPT)
 check("the summarizer is told to merge notes rather than append them",
       "sources.notes" in W.SUMMARY_PROMPT and "merge rather than append" in W.SUMMARY_PROMPT)
 check("the report clears the notes only after writing the digest",

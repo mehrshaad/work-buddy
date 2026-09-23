@@ -2392,6 +2392,20 @@ def collect_notes(cfg: dict) -> dict:
     return {"available": True, "text": body, "lines": len(body.splitlines())}
 
 
+def merge_notes(stored: dict, fresh: dict | None) -> dict:
+    """Everything either side has, in order, without repeating a line."""
+    lines, seen = [], set()
+    for side in (stored or {}, fresh or {}):
+        for ln in (side.get("text") or "").splitlines():
+            t = ln.strip()
+            if t and t not in seen:
+                seen.add(t)
+                lines.append(t)
+    if not lines:
+        return stored or {"available": False, "reason": "nothing written"}
+    return {"available": True, "text": "\n".join(lines), "lines": len(lines)}
+
+
 def clear_notes(cfg: dict) -> bool:
     """Reset the file to its template once its contents are in a report."""
     p = notes_path(cfg)
@@ -2469,6 +2483,13 @@ Rules:
   nothing else recorded, add a bullet for it under the right heading; where it only
   restates what the evidence already shows, ignore it. Never quote it verbatim as its own
   section, and never mention that a note existed.
+- A note must reach EVERY part of the report it bears on, not just the bullet list. A note
+  about a call joined from a phone belongs under **Meetings** and counts as a meeting that
+  day; a note about work done elsewhere belongs under the area heading that work fits,
+  beside the tracked work on the same project; a note that changes how long something took
+  changes the time reported for it, including in the tracker rows. Put a note under
+  **Other** only when it genuinely fits no existing heading and no heading of its own is
+  warranted — an unrelated one-off. Preferring **Other** over the right section is wrong.
 - Base every bullet on evidence in the JSON. Commit subjects, meeting names (meetings_attended and unjoined_meetings) and Claude Code prompts are the strongest signals of intent; app/window time and shell commands are supporting context only.
 - When commits exist, describe what actually changed using the commit subject, body and changed-file stats. If more than one repo has commits, make clear per repo what was done (separate bullets or separate area headings per repo).
 - Do NOT invent work. Do NOT list raw app names or timings as bullets. In the summary bullets
@@ -3064,7 +3085,16 @@ def load_digest(cfg: dict, day: date_cls) -> dict | None:
             log_line(cfg, f"repair: refresh failed for {day} ({exc!r}), using stored")
             return stored
         for key in LOSSY_SOURCES:
-            if key in (stored.get("sources") or {}):
+            if key not in (stored.get("sources") or {}):
+                continue
+            if key == "notes":
+                # Notes are the one lossy source that can gain new content between
+                # runs: the file is cleared after use, so whatever is in it now was
+                # written since. Replacing rather than merging threw that away and
+                # put the already-used note back in its place.
+                fresh["sources"][key] = merge_notes(stored["sources"][key],
+                                                    fresh["sources"].get(key))
+            else:
                 fresh["sources"][key] = stored["sources"][key]
         for key in ("reconstructed", "after_hours_included"):
             if key in stored:
