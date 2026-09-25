@@ -943,8 +943,8 @@ _home = TMP / "plughome"
 (_home / ".local" / "bin").mkdir(parents=True, exist_ok=True)
 _status = subprocess.run([str(Path.home() / ".local/bin/worklog"), "status"],
                          capture_output=True, text=True).stdout.strip() or "{}"
-def _plug_with(teams):
-    (_home / "status.json").write_text(_status)
+def _plug_with(teams, **status):
+    (_home / "status.json").write_text(json.dumps({**json.loads(_status), **status}))
     (_home / "teams.json").write_text(json.dumps(teams))
     stub = _home / ".local" / "bin" / "worklog"
     stub.write_text('#!/bin/sh\ncase "$1" in status) cat "$HOME/status.json";; '
@@ -970,6 +970,40 @@ check("the menu bar offers a retry when the send failed",
 _o = _plug_with(_base)
 check("with nothing failed the menu bar shows no retry",
       "Retry" not in _o and "--Prepare it now" in _o)
+_o = _plug_with({**_base, "failed": "no connection"},
+                busy=["Preparing the 24 Sep summary", "Writing the report"])
+check("while a summary is being prepared the menu says so and offers nothing to press",
+      "--Preparing the 24 Sep summary… | sfimage=hourglass" in _o
+      and "Retry" not in _o and "--Prepare it now" not in _o and "--Send it now" not in _o)
+check("while the report is being written its button says so",
+      "Writing the report… |" in _o and "Write today's report now" not in _o)
+
+# the spinner: a marker per running process, gone when it ends, ignored once it dies
+_bcfg = {"state_dir": str(TMP / "busystate")}
+with W.busy(_bcfg, "Preparing the 24 Sep summary"):
+    check("a running job is listed as busy",
+          W.busy_now(_bcfg) == ["Preparing the 24 Sep summary"])
+check("a finished job is no longer busy", W.busy_now(_bcfg) == [])
+(TMP / "busystate" / "busy" / "999999").write_text("Writing the report")
+check("a job that died without cleaning up is not busy, and its marker is removed",
+      W.busy_now(_bcfg) == [] and not (TMP / "busystate" / "busy" / "999999").exists())
+_bplug = str(Path(W.__file__).parent.parent / "swiftbar" / "workbuddy-busy.250ms.sh")
+import os as _os
+def _spin():
+    return subprocess.run(["/bin/sh", _bplug], capture_output=True, text=True,
+                          env={**_os.environ, "WORKBUDDY_STATE": str(TMP / "busystate"),
+                               "TMPDIR": str(TMP)}).stdout
+check("the spinner shows nothing when idle", _spin() == "")
+with W.busy(_bcfg, "Sending the 24 Sep summary"):
+    _a, _b = _spin(), _spin()
+check("the spinner names the job in the bar and in full below",
+      "Sending… | size=13" in _a and "\nSending the 24 Sep summary… | size=13" in _a, _a)
+check("the spinner moves from one refresh to the next",
+      _a.split()[0] != _b.split()[0], f"{_a.split()[0]} {_b.split()[0]}")
+(TMP / "busystate" / "busy" / "999999").write_text("Writing the report")
+check("the spinner ignores a job that died", _spin() == "")
+check("install links the spinner plugin",
+      "workbuddy-busy.250ms.sh" in (Path(W.__file__).parent.parent / "install.sh").read_text())
 
 (_adir / "teams" / f"pending-{_atarget.isoformat()}.json").unlink()
 check("nothing staged by late morning is an alert",

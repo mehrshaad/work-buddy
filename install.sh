@@ -96,7 +96,8 @@ fi
 PLUGINS="$HOME/Library/Application Support/SwiftBar/Plugins"
 if [ -d "$PLUGINS" ]; then
   ln -sf "$ROOT/swiftbar/workbuddy.10s.py" "$PLUGINS/workbuddy.10s.py"
-  echo "linked the SwiftBar plugin"
+  ln -sf "$ROOT/swiftbar/workbuddy-busy.250ms.sh" "$PLUGINS/workbuddy-busy.250ms.sh"
+  echo "linked the SwiftBar plugins"
 else
   echo "SwiftBar not found — install it with: brew install --cask swiftbar"
 fi

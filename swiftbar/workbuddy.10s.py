@@ -224,10 +224,16 @@ def clean(text, limit=70):
 
 
 ts = jrun("teams")
+# While a summary is being written or sent, say so and offer nothing to press: a
+# retry clicked mid-run looks like it did nothing, then runs the whole thing again.
+running = [job for job in (st.get("busy") or []) if "summary" in job]
 if ts and ts.get("date"):
     print("---")
     print(f"{warn_for('summary')}Daily summary | {FONT}")
-    if not ts["staged"] and ts.get("failed"):
+    if running:
+        for job in running:
+            print(f"--{job}… | sfimage=hourglass color=#5b6770,#a4b0be {FONT}")
+    elif not ts["staged"] and ts.get("failed"):
         print(f"--Failed: {clean(ts['failed'])} | color=#a11d10,#ff6b5b {FONT}")
         act("--Retry", "teams", "prepare")
     elif not ts["staged"]:
@@ -259,7 +265,10 @@ if ts and ts.get("date"):
 
 # ---------------------------------------------------------------- shortcuts ----
 print("---")
-act(f"{warn_for('report')}Write today's report now", "report")
+if "Writing the report" in (st.get("busy") or []):
+    print(f"Writing the report… | sfimage=hourglass color=#5b6770,#a4b0be {FONT}")
+else:
+    act(f"{warn_for('report')}Write today's report now", "report")
 for a in owned("report"):
     print(f"--{a['text']} | color=#a11d10,#ff6b5b {FONT}")
 # routed through the CLI rather than /usr/bin/open with a path: the output folder has a

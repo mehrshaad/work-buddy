@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import contextlib
 import fcntl
 import json
 import os
@@ -3446,6 +3447,38 @@ def write_weekly(cfg: dict, day: date_cls) -> str | None:
 # commands
 # --------------------------------------------------------------------------- #
 
+@contextlib.contextmanager
+def busy(cfg: dict, label: str):
+    """Say what is running, so the menu bar can spin until it finishes.
+
+    One file per process, named by pid, so a run killed before its cleanup is
+    recognised as dead rather than spinning forever.
+    """
+    d = expand(cfg["state_dir"]) / "busy"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / str(os.getpid())
+    f.write_text(label, encoding="utf-8")
+    try:
+        yield
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def busy_now(cfg: dict) -> list[str]:
+    """What is running right now, dropping markers left by processes that died."""
+    out = []
+    for f in sorted((expand(cfg["state_dir"]) / "busy").glob("[0-9]*")):
+        try:
+            os.kill(int(f.name), 0)
+        except ProcessLookupError:
+            f.unlink(missing_ok=True)
+            continue
+        except (PermissionError, ValueError):
+            pass
+        out.append(f.read_text(encoding="utf-8").strip())
+    return out
+
+
 def report_lock(cfg: dict, wait: bool = False):
     """Hold an exclusive lock for the life of the process, or None if held already.
 
@@ -3853,6 +3886,7 @@ def cmd_status(cfg: dict, args) -> int:
         "meetings_today": att.get("count") or 0,
         "degraded_days": backlog,
         "tokens_today": tokens,
+        "busy": busy_now(cfg),
         "work_time": is_work_time(cfg, now),
         "today": day.isoformat(),
     }
@@ -4379,11 +4413,14 @@ def cmd_teams(cfg: dict, args) -> int:
         print("no work days configured")
         return 1
     if args.action == "prepare":
-        return teams_prepare(cfg, day, args.quiet)
+        with busy(cfg, f"Preparing the {day:%-d %b} summary"):
+            return teams_prepare(cfg, day, args.quiet)
     if args.action == "send":
-        return teams_send(cfg, day, args.dry_run)
+        with busy(cfg, f"Sending the {day:%-d %b} summary"):
+            return teams_send(cfg, day, args.dry_run)
     if args.action == "autosend":
-        return teams_autosend(cfg, day)
+        with busy(cfg, f"Sending the {day:%-d %b} summary"):
+            return teams_autosend(cfg, day)
     if args.action == "skip":
         return teams_skip(cfg, day)
     if args.action == "show":
@@ -4872,6 +4909,10 @@ def main() -> int:
 
     args = ap.parse_args()
     cfg = load_config()
+    label = {"report": "Writing the report", "repair": "Repairing missed reports"}.get(args.cmd)
+    if label:
+        with busy(cfg, label):
+            return {"report": cmd_report, "repair": cmd_repair}[args.cmd](cfg, args)
     return {"sample": cmd_sample, "report": cmd_report, "digest": cmd_digest,
             "doctor": cmd_doctor, "repair": cmd_repair, "weekly": cmd_weekly,
             "pause": cmd_pause, "resume": cmd_resume, "status": cmd_status,
