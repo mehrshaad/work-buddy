@@ -869,6 +869,49 @@ _psrc = __import__("inspect").getsource(W.teams_prepare)
 check("prepare carries the send state onto the new record",
       '"sent", "opened", "opened_at", "route"' in _psrc and "**keep}" in _psrc)
 
+# 24 Sep went unsent: the 17:00 report ran all night, the 09:00 prepare found the lock
+# held and exited, and the 10:00 send found nothing staged. Prepare must wait instead.
+_ldir = TMP / "lockstate"
+_lcfg = {"state_dir": str(_ldir)}
+_ldir.mkdir(exist_ok=True)
+_holder = subprocess.Popen([sys.executable, "-c",
+    "import fcntl,sys,time; f=open(sys.argv[1],'w'); fcntl.flock(f,fcntl.LOCK_EX); "
+    "print('held',flush=True); time.sleep(2)", str(_ldir / "report.lock")],
+    stdout=subprocess.PIPE, text=True)
+_holder.stdout.readline()
+check("a held report lock refuses a non-waiting caller", W.report_lock(_lcfg) is None)
+_t0 = datetime.now()
+_lk = W.report_lock(_lcfg, wait=True)
+check("a waiting caller gets the lock once the holder lets go",
+      _lk is not None and (datetime.now() - _t0).total_seconds() >= 1)
+_holder.wait()
+_lk.close()
+check("prepare waits for the lock rather than exiting",
+      "report_lock(cfg, wait=True)" in _psrc and "holds the lock, exiting" not in _psrc)
+check("prepare keeps the lock handle, or the lock is released at once",
+      "lock = report_lock(cfg)" in _psrc)
+
+# the timeout is wall-clock: the monotonic clock stops while a Mac sleeps, which let a
+# 600s summarizer call hold the report lock from 17:21 to 09:00
+check("run returns a command's output", W.run(["echo", "hi"]) == (0, "hi", ""))
+_real_time = W.time
+class _Jump:
+    """The first reading sets the deadline; every later one is an hour on, as after sleep."""
+    def __init__(self): self.n = 0
+    def time(self):
+        self.n += 1
+        return _real_time.time() + (0 if self.n == 1 else 3600)
+    def __getattr__(self, k): return getattr(_real_time, k)
+W.time = _Jump()
+try:
+    _t0 = datetime.now()
+    _r = W.run(["sleep", "30"], timeout=600)
+    _el = (datetime.now() - _t0).total_seconds()
+finally:
+    W.time = _real_time
+check("run times out on wall-clock time that passed during sleep",
+      _r[0] == 124 and _el < 10, f"rc={_r[0]} after {_el:.1f}s")
+
 (_adir / "teams" / f"pending-{_atarget.isoformat()}.json").unlink()
 check("nothing staged by late morning is an alert",
       "summary_missing" in _keys(_acfg(enabled=True)))

@@ -70,15 +70,25 @@ def log_line(cfg: dict, msg: str):
 
 
 def run(cmd, timeout=30, cwd=None) -> tuple[int, str, str]:
-    """Run a command, never raise. Returns (rc, stdout, stderr)."""
+    """Run a command, never raise. Returns (rc, stdout, stderr).
+
+    The timeout is wall-clock. subprocess measures it on the monotonic clock, which on
+    a Mac stops while the machine sleeps: a 600s summarizer call started in a dark wake
+    ran from 17:21 to 09:00 the next day, holding the report lock the whole night.
+    """
+    deadline = time.time() + timeout
     try:
-        p = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd,
-            errors="replace",
-        )
-        return p.returncode, p.stdout.strip(), p.stderr.strip()
-    except subprocess.TimeoutExpired:
-        return 124, "", "timeout"
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, cwd=cwd, errors="replace") as p:
+            while True:
+                try:
+                    out, err = p.communicate(timeout=min(5, max(deadline - time.time(), 0.1)))
+                    return p.returncode, out.strip(), err.strip()
+                except subprocess.TimeoutExpired:
+                    if time.time() >= deadline:
+                        p.kill()
+                        p.communicate()
+                        return 124, "", "timeout"
     except (FileNotFoundError, OSError) as exc:
         return 127, "", str(exc)
 
@@ -3436,17 +3446,17 @@ def write_weekly(cfg: dict, day: date_cls) -> str | None:
 # commands
 # --------------------------------------------------------------------------- #
 
-def report_lock(cfg: dict):
+def report_lock(cfg: dict, wait: bool = False):
     """Hold an exclusive lock for the life of the process, or None if held already.
 
     Stops a manual `worklog report` and the 17:00 timer from summarizing the same
-    day concurrently and racing each other's write.
+    day concurrently and racing each other's write. With `wait`, block until it is free.
     """
     path = expand(cfg["state_dir"]) / "report.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(path, "w")
     try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fh, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
     except OSError:
         fh.close()
         return None
@@ -4125,10 +4135,15 @@ def teams_message(cfg: dict, text: str, html: bool = False) -> str:
 def teams_prepare(cfg: dict, day: date_cls, quiet: bool = False) -> int:
     """Make the day fit to send, then stage it. Never sends."""
     # Two prepares can overlap — the 09:00 agent and a menu-bar press a minute before —
-    # and both repair and restage the same day. One is enough.
-    if report_lock(cfg) is None:
-        log_line(cfg, "teams: another run holds the lock, exiting")
-        return 0
+    # and both repair and restage the same day, so take the report lock. Wait for it
+    # rather than exit: the holder is often the late report for the very day being
+    # staged, and exiting left 24 Sep unstaged, so the 10:00 send had nothing to post.
+    # The second prepare then finds the day healthy and only restages it. Keep the
+    # handle: a discarded one is closed at once, which releases the lock.
+    lock = report_lock(cfg)
+    if lock is None:
+        log_line(cfg, "teams: another run holds the lock, waiting for it")
+        lock = report_lock(cfg, wait=True)
     added = None
     try:
         # yesterday's evening work is appended by today's report, which has not run yet
