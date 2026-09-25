@@ -217,11 +217,20 @@ for key, name in (("git", "Git commits"), ("shell", "Shell history"),
         "false" if on else "true")
 
 # ------------------------------------------------------------ daily summary ----
+def clean(text, limit=70):
+    """An error as one menu line: a `|` would start SwiftBar's parameters."""
+    text = " ".join(str(text).replace("|", "/").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 ts = jrun("teams")
 if ts and ts.get("date"):
     print("---")
     print(f"{warn_for('summary')}Daily summary | {FONT}")
-    if not ts["staged"]:
+    if not ts["staged"] and ts.get("failed"):
+        print(f"--Failed: {clean(ts['failed'])} | color=#a11d10,#ff6b5b {FONT}")
+        act("--Retry", "teams", "prepare")
+    elif not ts["staged"]:
         print(f"--Nothing staged for {ts['date']} | color=#5b6770,#a4b0be {FONT}")
         act("--Prepare it now", "teams", "prepare")
     elif ts["sent"]:
@@ -237,7 +246,11 @@ if ts and ts.get("date"):
             print(f"--Skipped: {ts['date']} ({ts['lines']} lines) | color=#5b6770,#a4b0be {FONT}")
         else:
             print(f"--Ready: {ts['date']} ({ts['lines']} lines){when} | color=#a85503,#ffa94d {FONT}")
-        act("--Send it now", "teams", "send")
+        if ts.get("send_error"):
+            print(f"--Send failed: {clean(ts['send_error'])} | color=#a11d10,#ff6b5b {FONT}")
+            act("--Retry sending", "teams", "send")
+        else:
+            act("--Send it now", "teams", "send")
         if not ts.get("skipped"):
             act("--Skip this one", "teams", "skip")
     act(f"--{'☑' if ts.get('auto_send') else '☐'}  Send automatically at "

@@ -912,6 +912,65 @@ finally:
 check("run times out on wall-clock time that passed during sleep",
       _r[0] == 124 and _el < 10, f"rc={_r[0]} after {_el:.1f}s")
 
+# a failure must be visible afterwards, so the menu bar can offer a retry
+_fcfg = _acfg(enabled=True, auto_send=True, auto_send_at="10:00",
+              flow_url_file=str(TMP / "no-flow"), recipient_file=str(TMP / "no-recipient"))
+(_adir / "teams" / f"pending-{_atarget.isoformat()}.json").unlink(missing_ok=True)
+W.teams_mark_failed(_fcfg, _atarget, "2026-09-24 could not be summarized (no connection)")
+check("a failed prepare shows up in the menu bar state",
+      W.teams_state(_fcfg, _atarget)["failed"] == "2026-09-24 could not be summarized (no connection)")
+check("a failed prepare is named in the alert",
+      any("failed to prepare" in a["text"] for a in
+          W.collect_alerts(_fcfg, _aday, [], _anow) if a["key"] == "summary_missing"))
+check("a staged day does not also report the prepare as failed",
+      (_stage(sent=False), W.teams_state(_fcfg, _atarget)["failed"])[1] is None)
+check("staging clears the failure record",
+      "teams_failed(cfg, day).unlink(missing_ok=True)" in _psrc)
+W.teams_failed(_fcfg, _atarget).unlink()
+# a flow nobody is listening on, and no fallback address: the send fails for real
+(TMP / "no-flow").write_text("http://127.0.0.1:9/flow")
+_rc = W.teams_send(_fcfg, _atarget)
+_st = W.teams_state(_fcfg, _atarget)
+check("a failed send is recorded against the staged day",
+      _rc == 1 and _st["send_error"] and not _st["sent"], str(_st))
+check("a failed send raises its own alert",
+      "summary_send_failed" in _keys(_fcfg))
+check("both successful send routes clear the error",
+      __import__("inspect").getsource(W.teams_send).count('rec.pop("send_error", None)') == 2)
+
+# and the menu bar must render the retry, through a stub CLI that reports the failure
+_home = TMP / "plughome"
+(_home / ".local" / "bin").mkdir(parents=True, exist_ok=True)
+_status = subprocess.run([str(Path.home() / ".local/bin/worklog"), "status"],
+                         capture_output=True, text=True).stdout.strip() or "{}"
+def _plug_with(teams):
+    (_home / "status.json").write_text(_status)
+    (_home / "teams.json").write_text(json.dumps(teams))
+    stub = _home / ".local" / "bin" / "worklog"
+    stub.write_text('#!/bin/sh\ncase "$1" in status) cat "$HOME/status.json";; '
+                    'teams) cat "$HOME/teams.json";; esac\n')
+    stub.chmod(0o755)
+    import os as _os
+    return subprocess.run([sys.executable, str(Path(W.__file__).parent.parent / "swiftbar"
+                                               / "workbuddy.10s.py")],
+                          capture_output=True, text=True,
+                          env={**_os.environ, "HOME": str(_home)}).stdout
+_base = {"date": "2026-09-24", "staged": False, "sent": False, "lines": 0,
+         "skipped": False, "auto_send": True, "auto_send_at": "10:00", "configured": True,
+         "failed": None, "send_error": None}
+_o = _plug_with({**_base, "failed": "could not be summarized | no connection"})
+check("the menu bar offers a retry when the prepare failed",
+      "--Retry | bash=" in _o and "param2=prepare" in _o.split("--Retry |")[1].split("\n")[0], _o[-300:])
+check("a failure reason cannot break the menu line",
+      "--Failed: could not be summarized / no connection |" in _o)
+_o = _plug_with({**_base, "staged": True, "lines": 3, "send_error": "could not open Teams"})
+check("the menu bar offers a retry when the send failed",
+      "--Send failed: could not open Teams" in _o and "--Retry sending | bash=" in _o
+      and "--Send it now" not in _o)
+_o = _plug_with(_base)
+check("with nothing failed the menu bar shows no retry",
+      "Retry" not in _o and "--Prepare it now" in _o)
+
 (_adir / "teams" / f"pending-{_atarget.isoformat()}.json").unlink()
 check("nothing staged by late morning is an alert",
       "summary_missing" in _keys(_acfg(enabled=True)))

@@ -3783,11 +3783,16 @@ def collect_alerts(cfg: dict, day: date_cls, backlog: list, now: datetime) -> li
         due = day.isoweekday() in cfg["work_days"]
         staging_hour = 9
         if due and now.hour >= staging_hour and target and rec is None:
+            failed = teams_failed(cfg, target).is_file()
             out.append({"key": "summary_missing", "where": "summary",
-                        "text": f"No summary staged for {target:%a %-d %b}"})
+                        "text": (f"{target:%a %-d %b} failed to prepare" if failed else
+                                 f"No summary staged for {target:%a %-d %b}")})
         elif rec and not rec.get("sent") and not rec.get("opened"):
             if rec.get("skipped"):
                 pass                         # deliberately dropped, not a problem
+            elif rec.get("send_error"):
+                out.append({"key": "summary_send_failed", "where": "summary",
+                            "text": f"{target:%a %-d %b} failed to send"})
             elif not t["auto_send"]:
                 out.append({"key": "summary_waiting", "where": "summary",
                             "text": f"{target:%a %-d %b} is staged and waiting to send"})
@@ -4052,6 +4057,17 @@ def teams_staged(cfg: dict, day: date_cls) -> Path:
     return d / f"pending-{day.isoformat()}.json"
 
 
+def teams_failed(cfg: dict, day: date_cls) -> Path:
+    """Why the last prepare for a day failed, so the menu bar can offer a retry."""
+    return teams_staged(cfg, day).with_name(f"failed-{day.isoformat()}.json")
+
+
+def teams_mark_failed(cfg: dict, day: date_cls, msg: str):
+    teams_failed(cfg, day).write_text(json.dumps(
+        {"date": day.isoformat(), "error": msg,
+         "at": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False))
+
+
 def teams_read(path: str) -> str:
     p = expand(path)
     return p.read_text(encoding="utf-8").strip() if p.is_file() else ""
@@ -4159,6 +4175,7 @@ def teams_prepare(cfg: dict, day: date_cls, quiet: bool = False) -> int:
         if not repair_day(cfg, day):
             msg = f"{day} could not be summarized ({reason})"
             log_line(cfg, f"teams: not staging: {msg}")
+            teams_mark_failed(cfg, day, msg)
             if not quiet:
                 notify(cfg, "Daily summary not ready", msg,
                        subtitle="the summarizer may be unreachable")
@@ -4172,6 +4189,7 @@ def teams_prepare(cfg: dict, day: date_cls, quiet: bool = False) -> int:
     body, err = teams_bullets(cfg, day)
     if body is None:
         log_line(cfg, f"teams: not staging: {err}")
+        teams_mark_failed(cfg, day, err or "nothing to send")
         if not quiet:
             notify(cfg, "Daily summary not ready", err or "nothing to send")
         return 1
@@ -4195,12 +4213,18 @@ def teams_prepare(cfg: dict, day: date_cls, quiet: bool = False) -> int:
         {"date": day.isoformat(), "staged_at": datetime.now().isoformat(timespec="seconds"),
          "text": body, "sent": False, **keep}, ensure_ascii=False, indent=2),
         encoding="utf-8")
+    teams_failed(cfg, day).unlink(missing_ok=True)
     log_line(cfg, f"teams: staged {day} ({len(body.splitlines())} lines) for review")
     if not quiet:
         notify(cfg, "Daily summary ready to send",
                f"{day.strftime('%a %-d %b')} - review it in the menu bar.",
                subtitle="nothing has been sent yet")
     return 0
+
+
+def teams_mark_send_failed(path: Path, rec: dict, msg: str):
+    rec["send_error"] = msg
+    path.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def teams_send(cfg: dict, day: date_cls, dry_run: bool = False) -> int:
@@ -4235,6 +4259,7 @@ def teams_send(cfg: dict, day: date_cls, dry_run: bool = False) -> int:
                 code = r.status
             rec.update({"sent": True, "opened": True, "route": "flow", "http": code,
                         "opened_at": datetime.now().isoformat(timespec="seconds")})
+            rec.pop("send_error", None)
             p.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
             log_line(cfg, f"teams: sent {day} via the flow (HTTP {code})")
             notify(cfg, "Daily summary sent", f"{day.strftime('%a %-d %b')} is on its way.")
@@ -4248,6 +4273,7 @@ def teams_send(cfg: dict, day: date_cls, dry_run: bool = False) -> int:
 
     if not who:
         print(f"the flow failed and no fallback address is set in {t['recipient_file']}")
+        teams_mark_send_failed(p, rec, "the flow failed and no fallback address is set")
         return 1
     # the clipboard always carries the full text, so a summary too long for the deeplink
     # can still be pasted over the top with cmd-A cmd-V
@@ -4257,10 +4283,12 @@ def teams_send(cfg: dict, day: date_cls, dry_run: bool = False) -> int:
             + (f"&message={urllib.parse.quote(prefill)}" if prefill else ""))
     if subprocess.run(["/usr/bin/open", link], capture_output=True).returncode != 0:
         log_line(cfg, f"teams: could not open the deeplink for {day}")
+        teams_mark_send_failed(p, rec, "could not open Teams")
         notify(cfg, "Could not open Teams", "the summary is on your clipboard")
         return 1
     rec.update({"opened": True, "prefilled": bool(prefill), "route": "deeplink",
                 "opened_at": datetime.now().isoformat(timespec="seconds")})
+    rec.pop("send_error", None)
     p.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
     log_line(cfg, f"teams: opened Teams for {day} (prefilled={bool(prefill)})")
     notify(cfg, "Summary ready in Teams",
@@ -4275,7 +4303,16 @@ def teams_state(cfg: dict, day: date_cls) -> dict:
     t = teams_cfg(cfg)
     p = teams_staged(cfg, day)
     rec = json.loads(p.read_text()) if p.is_file() else None
+    f = teams_failed(cfg, day)
+    failed = None
+    if not rec and f.is_file():
+        try:
+            failed = json.loads(f.read_text()).get("error")
+        except json.JSONDecodeError:
+            failed = "the last attempt failed"
     return {"date": day.isoformat(),
+            "failed": failed,
+            "send_error": (rec or {}).get("send_error"),
             "staged": bool(rec),
             "sent": bool(rec and rec.get("opened")),
             "sent_at": (rec or {}).get("opened_at"),
