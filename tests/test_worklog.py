@@ -215,7 +215,11 @@ else:
           "six, seven or eight cells" in W.WEEKLY_PROMPT)
 
 # ------------------------------------------------------------- excluded apps ---
-for _a in ("FaceTime", "Steam", "Spotify", "zoom.us", "Zoom", "Telegram", "telegram", "ZOOM.US"):
+# the names come from the live config: an app deliberately re-included (Zoom, 28 Sep
+# 2026) must not fail the suite. What is under test is that exclusion works at all,
+# and that it ignores case — the process name rarely matches the app name.
+for _a in [x for x in ("FaceTime", "Steam", "Spotify", "zoom.us", "Zoom", "Telegram")
+           if x in CFG["activity"]["exclude_apps"]] + ["telegram", "TELEGRAM"]:
     check(f"{_a} is excluded", W.is_excluded_app(CFG["activity"], _a))
 for _a in ("Code", "MSTeams", "Google Chrome"):
     check(f"{_a} is not excluded", not W.is_excluded_app(CFG["activity"], _a))
@@ -1223,6 +1227,14 @@ try:
           W.collect_calendar({**_ccfg, "_note_excludes": []}, D(2026, 7, 29))["count"] == 2)
 finally:
     W._collect_calendar_raw = _realcal
+
+
+# ------------------------------------------------------------ doctor: agents --
+# The rename left doctor globbing the old name, so it said "none" on a machine
+# where every agent was loaded.
+_dsrc = __import__("inspect").getsource(W.cmd_doctor)
+check("doctor looks for the agents under both names",
+      '"*worklog*.plist", "*workbuddy*.plist"' in _dsrc)
 
 
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")

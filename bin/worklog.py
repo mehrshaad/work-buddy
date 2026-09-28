@@ -3770,8 +3770,12 @@ def cmd_doctor(cfg: dict, args) -> int:
     print()
     backlog = scan_backlog(cfg, date_cls.today())
     print(f"repair backlog: {[f'{d} ({s})' for d, s, _ in backlog] or 'none'}")
-    plists = list(Path("~/Library/LaunchAgents").expanduser().glob("*worklog*.plist"))
-    print(f"launch agents installed: {[p.name for p in plists] or 'none'}")
+    # the agents were renamed com.worklog.* -> com.workbuddy.*; globbing the old name
+    # alone made doctor report "none" while all six were installed and loaded
+    _la = Path("~/Library/LaunchAgents").expanduser()
+    plists = sorted({q.name for pat in ("*worklog*.plist", "*workbuddy*.plist")
+                     for q in _la.glob(pat)})
+    print(f"launch agents installed: {plists or 'none'}")
     return 0
 
 
