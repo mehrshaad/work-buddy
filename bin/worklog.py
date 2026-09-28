@@ -555,6 +555,38 @@ def is_excluded_app(acfg: dict, app: str, bundle: str | None = None) -> bool:
     return bid.lower() not in allow
 
 
+def title_excluded(patterns, phrases, title: str) -> bool:
+    """True when a window, meeting or calendar title must not be recorded.
+
+    `patterns` are the regexes in `activity.exclude_title_patterns`; `phrases` are
+    the literal `exclude:` lines from the notes file, matched as case-insensitive
+    substrings so a meeting can be named the way it reads on screen. Applied when a
+    sample is written AND when one is read back, so a rule added today also hides
+    titles already on disk.
+    """
+    t = (title or "").strip()
+    if not t:
+        return False
+    for pat in patterns or []:
+        try:
+            if re.search(pat, t):
+                return True
+        except re.error:
+            pass
+    low = t.lower()
+    return any(str(p).strip() and str(p).strip().lower() in low for p in phrases or [])
+
+
+def note_excludes(cfg: dict) -> list[str]:
+    """Phrases today's note asked to keep out of the report.
+
+    Read once per digest and carried in cfg: a repair re-collects after the notes
+    file has been emptied, so the list has to travel with the day, not the file.
+    """
+    ex = cfg.get("_note_excludes")
+    return list(ex) if ex is not None else list(collect_notes(cfg).get("exclude") or [])
+
+
 def idle_seconds() -> int:
     rc, out, _ = run(["ioreg", "-c", "IOHIDSystem"], timeout=10)
     if rc != 0:
@@ -701,13 +733,9 @@ def cmd_sample(cfg: dict, args) -> int:
         # trace, and "Spotify (excluded)" in a work log is still a record of Spotify
         title = ""
         app = EXCLUDED_APP
-    for pat in acfg["exclude_title_patterns"]:
-        try:
-            if title and re.search(pat, title):
-                title = "(excluded)"
-                break
-        except re.error:
-            pass
+    pats, phrases = acfg["exclude_title_patterns"], note_excludes(cfg)
+    if title_excluded(pats, phrases, title):
+        title = "(excluded)"
 
     redact = Redactor(cfg)
     rec = {
@@ -725,25 +753,14 @@ def cmd_sample(cfg: dict, args) -> int:
     for wapp, wtitle in meeting_windows_now(cfg):
         if is_excluded_app(acfg, wapp):
             continue
-        for pat in acfg["exclude_title_patterns"]:
-            try:
-                if re.search(pat, wtitle):
-                    wtitle = "(excluded)"
-                    break
-            except re.error:
-                pass
+        if title_excluded(pats, phrases, wtitle):
+            wtitle = "(excluded)"
         windows.append([wapp, redact(wtitle)[:300]])
     rec["meeting_windows"] = windows
 
     sched = scheduled_meeting_now(cfg)
-    if sched:
-        for pat in acfg["exclude_title_patterns"]:
-            try:
-                if re.search(pat, sched):
-                    sched = None
-                    break
-            except re.error:
-                pass
+    if sched and title_excluded(pats, phrases, sched):
+        sched = None
     rec["scheduled_now"] = redact(sched)[:300] if sched else None
     raw_dir = expand(cfg["state_dir"]) / "raw" / now.strftime("%Y-%m-%d")
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -788,6 +805,10 @@ def collect_activity(cfg: dict, day: date_cls) -> dict:
     # A sample only ever credits up to this much time. Anything longer means the
     # machine was asleep or the agent was not running — not time spent in that app.
     cap = float(cfg["activity"].get("sample_gap_cap_minutes", 2))
+    # also on read: a pattern or a note added today has to hide titles that were
+    # already sampled, which write-time filtering alone can never do
+    acfg = cfg["activity"]
+    pats, phrases = acfg["exclude_title_patterns"], note_excludes(cfg)
 
     for i, rec in enumerate(samples):
         if i + 1 < len(samples):
@@ -804,10 +825,9 @@ def collect_activity(cfg: dict, day: date_cls) -> dict:
             idle_min += gap
             continue
         per_app[rec["app"]] += gap
-        if rec.get("title"):
+        if rec.get("title") and not title_excluded(pats, phrases, rec["title"]):
             titles[rec["app"]][rec["title"]] += gap
 
-    acfg = cfg["activity"]
     apps = []
     for app, mins in sorted(per_app.items(), key=lambda kv: -kv[1]):
         if mins < acfg["min_minutes_to_report"]:
@@ -862,6 +882,7 @@ def collect_meetings_attended(cfg: dict, day: date_cls) -> dict:
     if not path.is_file():
         return {"available": False, "reason": "no activity samples for this day"}
 
+    pats, phrases = acfg["exclude_title_patterns"], note_excludes(cfg)
     per_title, presence_samples = defaultdict(list), 0
     with open(path, errors="replace") as fh:
         for line in fh:
@@ -880,7 +901,7 @@ def collect_meetings_attended(cfg: dict, day: date_cls) -> dict:
             if windows is None:
                 if rec.get("app") in apps:
                     t = _meeting_title(rec["app"], rec.get("title", ""))
-                    if t:
+                    if t and not title_excluded(pats, phrases, t):
                         per_title[t].append(dt)
                 continue
 
@@ -890,7 +911,7 @@ def collect_meetings_attended(cfg: dict, day: date_cls) -> dict:
                 if wapp not in apps or is_excluded_app(acfg, wapp):
                     continue
                 t = _meeting_title(wapp, wtitle)
-                if t and t not in seen:
+                if t and t not in seen and not title_excluded(pats, phrases, t):
                     seen.add(t)
                     per_title[t].append(dt)
 
@@ -963,6 +984,7 @@ def collect_unjoined_meetings(cfg: dict, day: date_cls, attended=None,
     if not path.is_file():
         return {"available": False, "reason": "no activity samples for this day"}
 
+    pats, phrases = acfg["exclude_title_patterns"], note_excludes(cfg)
     per_title, seen_field = defaultdict(list), False
     with open(path, errors="replace") as fh:
         for line in fh:
@@ -978,7 +1000,7 @@ def collect_unjoined_meetings(cfg: dict, day: date_cls, attended=None,
                 continue
             seen_field = True
             t = rec["scheduled_now"]
-            if t and t != "(excluded)":
+            if t and t != "(excluded)" and not title_excluded(pats, phrases, t):
                 per_title[t].append(dt)
 
     if not seen_field:
@@ -1613,6 +1635,31 @@ def collect_calendar_ics(cfg: dict, day: date_cls) -> dict | None:
 
 
 def collect_calendar(cfg: dict, day: date_cls) -> dict:
+    """The day's calendar, with excluded titles removed.
+
+    Filtering sits here rather than in each source so every route — the ICS feed,
+    Outlook, Calendar.app and icalBuddy — obeys one rule. icalBuddy returns an
+    unparsed line per event, so the whole line is what gets matched.
+    """
+    res = _collect_calendar_raw(cfg, day)
+    events = res.get("events")
+    if not events:
+        return res
+    pats = cfg["activity"]["exclude_title_patterns"]
+    phrases = note_excludes(cfg)
+    kept = [e for e in events
+            if not title_excluded(pats, phrases,
+                                  e.get("subject") or e.get("raw") or "")]
+    if len(kept) == len(events):
+        return res
+    log_line(cfg, f"excluded {len(events) - len(kept)} calendar event(s) on {day}")
+    out = {**res, "events": kept}
+    if "count" in res:
+        out["count"] = len(kept)
+    return out
+
+
+def _collect_calendar_raw(cfg: dict, day: date_cls) -> dict:
     ccfg = cfg["calendar"]
     if not ccfg["enabled"]:
         return {"available": False, "reason": "disabled"}
@@ -2366,6 +2413,11 @@ NOTES_TEMPLATE = """# Notes for the next report
 Anything the tracker cannot see — work on another machine, a call it missed, a
 decision taken away from the keyboard. Plain bullets are enough.
 
+A line starting `exclude:` keeps something out instead: `exclude: Weekly Sync Up`
+drops that meeting from the day's data before the report is written. It holds for
+this report only — to hide something every day, put it in
+activity.exclude_title_patterns.
+
 This file is emptied once its contents have gone into a report.
 
 - """
@@ -2393,14 +2445,36 @@ def notes_body(cfg: dict) -> str:
     return "\n".join(keep).strip()
 
 
+def split_notes(body: str) -> tuple[str, list[str]]:
+    """Work notes and `exclude:` directives, kept apart.
+
+    A directive must never travel as note text. The summarizer is told to write from
+    the notes, so leaving "exclude: Weekly Sync Up" among them is a way of asking for
+    a bullet about Weekly Sync Up.
+    """
+    text, excl = [], []
+    for line in body.splitlines():
+        t = line.strip().lstrip("-*\u2022").strip()
+        if t.lower().startswith("exclude:"):
+            phrase = t.split(":", 1)[1].strip().strip('"\'')
+            if phrase:
+                excl.append(phrase)
+            continue
+        text.append(line)
+    return "\n".join(text).strip(), excl
+
+
 def collect_notes(cfg: dict) -> dict:
     ncfg = {**NOTES_DEFAULTS, **(cfg.get("notes") or {})}
     if not ncfg["enabled"]:
         return {"available": False, "reason": "disabled"}
-    body = notes_body(cfg)
-    if not body:
+    text, excl = split_notes(notes_body(cfg))
+    if not text and not excl:
         return {"available": False, "reason": "nothing written"}
-    return {"available": True, "text": body, "lines": len(body.splitlines())}
+    out = {"available": True, "text": text, "lines": len(text.splitlines())}
+    if excl:
+        out["exclude"] = excl
+    return out
 
 
 def merge_notes(stored: dict, fresh: dict | None) -> dict:
@@ -2412,9 +2486,20 @@ def merge_notes(stored: dict, fresh: dict | None) -> dict:
             if t and t not in seen:
                 seen.add(t)
                 lines.append(t)
+    excl, seen_x = [], set()
+    for side in (stored or {}, fresh or {}):
+        for phrase in side.get("exclude") or []:
+            t = str(phrase).strip()
+            if t and t.lower() not in seen_x:
+                seen_x.add(t.lower())
+                excl.append(t)
     if not lines:
-        return stored or {"available": False, "reason": "nothing written"}
-    return {"available": True, "text": "\n".join(lines), "lines": len(lines)}
+        base = stored or {"available": False, "reason": "nothing written"}
+        return {**base, "exclude": excl} if excl else base
+    out = {"available": True, "text": "\n".join(lines), "lines": len(lines)}
+    if excl:
+        out["exclude"] = excl
+    return out
 
 
 def clear_notes(cfg: dict) -> bool:
@@ -2428,6 +2513,13 @@ def clear_notes(cfg: dict) -> bool:
 
 
 def build_digest(cfg: dict, day: date_cls) -> dict:
+    notes = collect_notes(cfg)
+    # every collector below has to know what to leave out, and a repair re-collects
+    # after the notes file was cleared, so the phrases travel in cfg rather than
+    # being re-read from a file that no longer holds them
+    seeded = list(cfg.get("_note_excludes") or [])
+    cfg = {**cfg, "_note_excludes": seeded + [p for p in (notes.get("exclude") or [])
+                                              if p not in seeded]}
     start, end = window_bounds(cfg, day)
     attended = collect_meetings_attended(cfg, day)
     calendar = collect_calendar(cfg, day)
@@ -2440,7 +2532,7 @@ def build_digest(cfg: dict, day: date_cls) -> dict:
             "activity": collect_activity(cfg, day),
             "git": collect_git(cfg, day),
             "shell": collect_shell(cfg, day),
-            "notes": collect_notes(cfg),
+            "notes": notes,
             "calendar": calendar,
             "meetings_attended": attended,
             "unjoined_meetings": collect_unjoined_meetings(cfg, day, attended, calendar),
@@ -2501,6 +2593,12 @@ Rules:
   changes the time reported for it, including in the tracker rows. Put a note under
   **Other** only when it genuinely fits no existing heading and no heading of its own is
   warranted — an unrelated one-off. Preferring **Other** over the right section is wrong.
+- A note may ask for something to be left OUT ("don't log the 1:1", "skip the vendor
+  call"). Honour it: drop that item from the bullets, from the Evidence block and from the
+  tracker rows, and do not replace it with a vaguer mention of the same thing. Never state
+  that anything was withheld, and never treat the request itself as work done.
+  `sources.notes.exclude` lists phrases already removed from the data for the same reason —
+  never name them, and never reintroduce a matching item from another source.
 - Base every bullet on evidence in the JSON. Commit subjects, meeting names (meetings_attended and unjoined_meetings) and Claude Code prompts are the strongest signals of intent; app/window time and shell commands are supporting context only.
 - When commits exist, describe what actually changed using the commit subject, body and changed-file stats. If more than one repo has commits, make clear per repo what was done (separate bullets or separate area headings per repo).
 - Do NOT invent work. Do NOT list raw app names or timings as bullets. In the summary bullets
@@ -3091,7 +3189,10 @@ def load_digest(cfg: dict, day: date_cls) -> dict | None:
 
     if stored:
         try:
-            fresh = build_digest(cfg, day)
+            # what the day's note asked to hide outlives the note file itself, or a
+            # repair would re-collect the meeting it was written to remove
+            kept_out = ((stored.get("sources") or {}).get("notes") or {}).get("exclude")
+            fresh = build_digest({**cfg, "_note_excludes": list(kept_out or [])}, day)
         except Exception as exc:            # a failed refresh must not lose the day
             log_line(cfg, f"repair: refresh failed for {day} ({exc!r}), using stored")
             return stored

@@ -584,7 +584,7 @@ check("the pre-split config keys still resolve",
 # source that forgets to is exactly how paused personal time leaks into a work log.
 import inspect as _inspect
 _TIMESTAMPED = ["collect_meetings_attended", "collect_git", "collect_shell",
-                "collect_calendar_ics", "collect_calendar", "collect_claude_code",
+                "collect_calendar_ics", "_collect_calendar_raw", "collect_claude_code",
                 "collect_tokenwise", "collect_cloud", "collect_claude_export"]
 for _fn in _TIMESTAMPED:
     _src = _inspect.getsource(getattr(W, _fn))
@@ -596,7 +596,8 @@ check("collect_unjoined_meetings reads only the sampler's own file",
       "activity.jsonl" in _inspect.getsource(W.collect_unjoined_meetings))
 # icalBuddy returns unstructured text, so it must be skipped rather than filtered
 check("the icalBuddy source is skipped on a paused day",
-      'prefer in ("auto", "icalbuddy") and not _pw' in _inspect.getsource(W.collect_calendar))
+      'prefer in ("auto", "icalbuddy") and not _pw'
+      in _inspect.getsource(W._collect_calendar_raw))
 # the AppleScript calendar sources must emit ISO, or a pause window cannot match them
 for _t in ("_OUTLOOK_SCRIPT", "_CALENDAR_APP_SCRIPT"):
     check(f"{_t} emits ISO timestamps", "my isoDate(" in getattr(W, _t))
@@ -1130,6 +1131,98 @@ check("no editor configured means the system default",
 check("the menu bar can open the notes file",
       '"open", "notes"' in (Path(W.__file__).parent.parent / "swiftbar"
                             / "workbuddy.10s.py").read_text())
+
+
+# ------------------------------------------------- exclusions: titles + notes --
+# The rule itself.
+_P = ["(?i)\\bbank\\b"]
+check("a configured pattern hides a title", W.title_excluded(_P, [], "My bank account"))
+check("a note phrase hides a title, case and position aside",
+      W.title_excluded([], ["weekly sync up"], "Meeting in Weekly Sync Up"))
+check("an unrelated title survives", not W.title_excluded(_P, ["standup"], "Design review"))
+check("an empty title is not an exclusion", not W.title_excluded(_P, ["x"], ""))
+check("a broken pattern is ignored, not fatal", not W.title_excluded(["(unclosed"], [], "x"))
+check("a blank note phrase never matches everything",
+      not W.title_excluded([], ["  "], "anything"))
+
+# The notes file: a directive is not a note.
+_xp = W.notes_path(_ncfg)
+_xp.write_text(W.NOTES_TEMPLATE + "\n- Reviewed a contract on another machine."
+               + "\n- exclude: Weekly Sync Up\nexclude: \"1:1\"")
+_xn = W.collect_notes(_ncfg)
+check("an exclude line becomes an exclusion", _xn["exclude"] == ["Weekly Sync Up", "1:1"],
+      str(_xn.get("exclude")))
+check("an exclude line is kept out of the note text the summarizer reads",
+      "exclude" not in _xn["text"] and "another machine" in _xn["text"], _xn["text"])
+check("a file holding only exclusions still counts as written",
+      W.collect_notes({**_ncfg, "notes": {**_ncfg["notes"]}})["available"])
+check("exclusions survive a repair's merge",
+      W.merge_notes({"available": True, "text": "- a", "lines": 1, "exclude": ["X"]},
+                    {"available": True, "text": "- a", "lines": 1,
+                     "exclude": ["x", "Y"]})["exclude"] == ["X", "Y"])
+check("a day with no note still repairs without an exclude key",
+      "exclude" not in W.merge_notes({"available": True, "text": "- a", "lines": 1}, None))
+check("the digest carries the day's exclusions to every collector",
+      "_note_excludes" in __import__("inspect").getsource(W.build_digest))
+check("a repair re-reads the exclusions from the stored digest, not the cleared file",
+      "_note_excludes" in __import__("inspect").getsource(W.load_digest))
+check("the summarizer is told to honour a note that asks for an omission",
+      "ask for something to be left OUT" in W.SUMMARY_PROMPT
+      and "sources.notes.exclude" in W.SUMMARY_PROMPT)
+check("the notes template says how to exclude something",
+      "exclude:" in W.NOTES_TEMPLATE)
+_xp.write_text(W.NOTES_TEMPLATE)
+
+# Gap 1: samples already on disk obey a rule added afterwards.
+_xs = TMP / "excl-read"; (_xs / "raw" / "2026-07-29").mkdir(parents=True, exist_ok=True)
+SYNC = "Meeting in Weekly Sync Up | Acme | a@b.com | Microsoft Teams"
+_xrows = [{"ts": f"2026-07-29T10:{i:02d}:00", "app": "Code", "title": "Weekly Sync Up notes",
+           "idle": 0, "meeting_windows": [["MSTeams", SYNC]],
+           "scheduled_now": "Weekly Sync Up"} for i in range(20)]
+(_xs / "raw" / "2026-07-29" / "activity.jsonl").write_text(
+    "".join(json.dumps(r) + "\n" for r in _xrows))
+_xcfg = {**json.loads(json.dumps(CFG)), "state_dir": str(_xs)}
+check("without a rule the sampled title is reported",
+      W.collect_activity(_xcfg, D(2026, 7, 29))["apps"][0]["titles"])
+check("without a rule the meeting is credited",
+      W.collect_meetings_attended(_xcfg, D(2026, 7, 29))["count"] == 1)
+_xcfg2 = {**_xcfg, "_note_excludes": ["weekly sync up"]}
+_xact = W.collect_activity(_xcfg2, D(2026, 7, 29))
+check("a rule added today hides a title sampled before it existed",
+      _xact["apps"][0]["titles"] == [])
+check("hiding a title does not delete the time spent in the app",
+      _xact["apps"][0]["app"] == "Code" and _xact["apps"][0]["minutes"] > 0)
+check("an excluded meeting is not credited on re-read",
+      W.collect_meetings_attended(_xcfg2, D(2026, 7, 29))["count"] == 0)
+_xunj = W.collect_unjoined_meetings(_xcfg2, D(2026, 7, 29))
+check("an excluded meeting is not reported as booked-but-not-joined",
+      _xunj.get("count") == 0, str(_xunj)[:120])
+_xpat = {**_xcfg}
+_xpat["activity"] = {**_xcfg["activity"],
+                     "exclude_title_patterns": ["(?i)weekly sync"]}
+check("a config pattern works retroactively too",
+      W.collect_meetings_attended(_xpat, D(2026, 7, 29))["count"] == 0)
+
+# Gap 2: every calendar route obeys the same rule.
+_realcal = W._collect_calendar_raw
+W._collect_calendar_raw = lambda cfg, day: {
+    "available": True, "source": "test", "count": 2,
+    "events": [{"subject": "Weekly Sync Up", "start": "2026-07-29T10:00:00",
+                "end": "2026-07-29T10:30:00"},
+               {"raw": "Standup|;|2026-07-29|;|09:30"}]}
+try:
+    _ccfg = {**json.loads(json.dumps(CFG)), "state_dir": str(TMP)}
+    _c1 = W.collect_calendar({**_ccfg, "_note_excludes": ["weekly sync up"]}, D(2026, 7, 29))
+    check("an excluded meeting is dropped from the calendar",
+          [e.get("subject") for e in _c1["events"]] == [None], str(_c1["events"])[:120])
+    check("the calendar count follows the filtering", _c1["count"] == 1)
+    _c2 = W.collect_calendar({**_ccfg, "_note_excludes": ["standup"]}, D(2026, 7, 29))
+    check("an unparsed icalBuddy line is matched as a whole",
+          len(_c2["events"]) == 1 and _c2["events"][0].get("subject") == "Weekly Sync Up")
+    check("a calendar with nothing to hide is returned untouched",
+          W.collect_calendar({**_ccfg, "_note_excludes": []}, D(2026, 7, 29))["count"] == 2)
+finally:
+    W._collect_calendar_raw = _realcal
 
 
 print(f"\n{len(ok)} passed, {len(fail)} failed, {len(skip)} skipped\n")
